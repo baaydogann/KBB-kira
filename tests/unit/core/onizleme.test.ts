@@ -51,3 +51,32 @@ describe('sozlesmeOnizleme', () => {
     expect(!s.ok && s.hata.kod).toBe('HISSE_TOPLAMI_HATALI')
   })
 })
+
+describe('mutasyon kapısı: sozlesmeOnizleme', () => {
+  it('azamiSatir verilmezse 24 satırla, verilirse o sayıyla sınırlanır', () => {
+    const acik = girdi({ bitis: null, ufuk: t('2030-01-01') })
+    const varsayilan = sozlesmeOnizleme(acik)
+    expect(varsayilan.ok && varsayilan.deger).toHaveLength(24)
+    const bes = sozlesmeOnizleme({ ...acik, azamiSatir: 5 })
+    expect(bes.ok && bes.deger).toHaveLength(5)
+    const kirk = sozlesmeOnizleme({ ...acik, azamiSatir: 40 })
+    expect(kirk.ok && kirk.deger).toHaveLength(40)
+  })
+  it('her malikin vergi statüsüne göre ayrı oran uygulanır', () => {
+    const s = sozlesmeOnizleme(girdi({
+      malikler: [{ kisiId: '1', pay: 1, payda: 2, statu: 'GMSI_GERCEK' }, { kisiId: '2', pay: 1, payda: 2, statu: 'SIRKET' }],
+      oranlar: (statu) => (statu === 'SIRKET' ? { stopaj: SIFIR, kdv: para('20') } : { stopaj: para('20'), kdv: SIFIR }),
+    }))
+    expect(s.ok && s.deger[0]!.malikler.map((m) => [m.kisiId, m.brut, m.kdv, m.stopaj, m.net].map((x) => (typeof x === 'string' ? x : x.toFixed(2))))).toEqual([
+      ['1', '5000.00', '0.00', '1000.00', '4000.00'],
+      ['2', '5000.00', '1000.00', '0.00', '6000.00'],
+    ])
+  })
+  it('kira bedeli tanımsız bir dönem varsa DONEM_DISI hatası döner', () => {
+    const s = sozlesmeOnizleme(girdi({
+      kiraDonemleri: [{ id: '1', baslangic: t('2026-02-01'), bitis: null, bedel: para('10000'), taban: 'AYLIK' }],
+    }))
+    expect(s.ok).toBe(false)
+    expect(!s.ok && s.hata.kod).toBe('DONEM_DISI')
+  })
+})

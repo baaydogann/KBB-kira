@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import fc from 'fast-check'
 import {
   ayAdi, ayAnahtari, ayEkle, ayFarki, ayKaydir, ayinGunSayisi, ayinIlkGunu, bugunIstanbul,
@@ -137,3 +137,73 @@ describe('iş günü', () => {
 
 function _tipKontrol(x: Tarih): string { return x }
 void _tipKontrol
+
+describe('mutasyon kapısı: biçim kenarları', () => {
+  it('tarihMi tam eşleşme ister; önek/sonek ve aralık dışı bileşenleri reddeder', () => {
+    for (const s of ['a2026-01-01', '2026-01-01 ', '2026-01-011', '2026-13-01', '2026-00-10', '2026-01-00', '2026-02-29', '3000-01-01', '1899-12-31']) {
+      expect(tarihMi(s)).toBe(false)
+    }
+    for (const s of ['2999-12-31', '1900-01-01', '2024-02-29']) expect(tarihMi(s)).toBe(true)
+  })
+
+  it('tarihAyristir: gg.aa.yyyy ve gg/aa/yyyy, tek ve çift haneli, çevresindeki boşluk kırpılır', () => {
+    for (const [girdi, beklenen] of [
+      [' 15.02.2026 ', '2026-02-15'], ['5.3.2026', '2026-03-05'], ['15/12/2026', '2026-12-15'], ['\t2026-10-15\n', '2026-10-15'],
+    ] as const) {
+      const s = tarihAyristir(girdi)
+      expect(s.ok && s.deger).toBe(beklenen)
+    }
+  })
+
+  it('tarihAyristir: önek ve sonek taşıyan girdiyi TARIH_GECERSIZ ile reddeder', () => {
+    for (const girdi of ['x01.02.2026', '01.02.2026x', '001.02.2026', '01.002.2026', '', '31.02.2026']) {
+      const s = tarihAyristir(girdi)
+      expect(s.ok).toBe(false)
+      if (!s.ok) {
+        expect(s.hata.kod).toBe('TARIH_GECERSIZ')
+        expect(s.hata.mesaj).toBe('Tarihi gg.aa.yyyy biçiminde girin.')
+      }
+    }
+  })
+})
+
+describe('mutasyon kapısı: aralık işlemleri', () => {
+  const ar = (b: string, s: string | null) => ({ baslangic: t(b), bitis: s === null ? null : t(s) })
+
+  it('kesisim: dört açık/kapalı uç kombinasyonu ve tek günlük kesişim', () => {
+    expect(kesisim(ar('2026-01-01', null), ar('2026-03-01', '2026-03-31'))).toEqual({ baslangic: '2026-03-01', bitis: '2026-03-31' })
+    expect(kesisim(ar('2026-01-01', '2026-06-30'), ar('2026-03-01', null))).toEqual({ baslangic: '2026-03-01', bitis: '2026-06-30' })
+    expect(kesisim(ar('2026-01-01', null), ar('2026-03-01', null))).toEqual({ baslangic: '2026-03-01', bitis: null })
+    expect(kesisim(ar('2026-01-01', '2026-01-10'), ar('2026-01-10', null))).toEqual({ baslangic: '2026-01-10', bitis: '2026-01-10' })
+    expect(kesisim(ar('2026-01-01', '2026-01-09'), ar('2026-01-10', null))).toBeNull()
+  })
+
+  it('icindeMi: uçlar dahil, açık uçlu aralık sonsuza uzanır', () => {
+    const kapali = ar('2026-01-10', '2026-01-20')
+    expect(icindeMi(t('2026-01-10'), kapali)).toBe(true)
+    expect(icindeMi(t('2026-01-20'), kapali)).toBe(true)
+    expect(icindeMi(t('2026-01-15'), kapali)).toBe(true)
+    expect(icindeMi(t('2026-01-09'), kapali)).toBe(false)
+    expect(icindeMi(t('2026-01-21'), kapali)).toBe(false)
+    const acik = ar('2026-01-10', null)
+    expect(icindeMi(t('2999-12-31'), acik)).toBe(true)
+    expect(icindeMi(t('2026-01-09'), acik)).toBe(false)
+  })
+})
+
+describe('mutasyon kapısı: bugunIstanbul sunucu saat diliminden bağımsızdır', () => {
+  const eskiTz = process.env.TZ
+  afterEach(() => {
+    if (eskiTz === undefined) delete process.env.TZ
+    else process.env.TZ = eskiTz
+    vi.resetModules()
+  })
+
+  it('süreç saat dilimi UTC iken bile İstanbul gününü verir', async () => {
+    process.env.TZ = 'UTC'
+    vi.resetModules()
+    const taze = await import('@/core/tarih')
+    expect(taze.bugunIstanbul(new Date('2026-10-15T22:30:00Z'))).toBe('2026-10-16')
+    expect(taze.bugunIstanbul(new Date('2026-10-15T20:30:00Z'))).toBe('2026-10-15')
+  })
+})

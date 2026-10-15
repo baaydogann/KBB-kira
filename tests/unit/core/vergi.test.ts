@@ -41,3 +41,50 @@ describe('VARSAYILAN_STATU_KURALLARI', () => {
     expect(VARSAYILAN_STATU_KURALLARI.KAMU).toMatchObject({ stopaj: null, kdvli: false, teyitGerekli: true })
   })
 })
+
+describe('mutasyon kapısı: statü tablosu ve hesap izi', () => {
+  it('statü kuralları spec §6.6 tablosunun tamamıyla birebir eşleşir', () => {
+    expect(VARSAYILAN_STATU_KURALLARI).toEqual({
+      GMSI_GERCEK: { etiket: 'Gerçek kişi (GMSİ)', stopaj: 'STOPAJ_94_5A', kdvli: false, teyitGerekli: false, muhsgkKodu: '041' },
+      SERBEST_MESLEK: { etiket: 'Serbest meslek erbabı', stopaj: 'STOPAJ_94_5A', kdvli: false, teyitGerekli: false, muhsgkKodu: '041' },
+      TICARI_AKTIF: { etiket: 'Tüccar (işletme aktifinde)', stopaj: null, kdvli: true, teyitGerekli: true, muhsgkKodu: null },
+      BASIT_USUL: { etiket: 'Basit usul', stopaj: 'STOPAJ_94_5A', kdvli: false, teyitGerekli: true, muhsgkKodu: '041' },
+      SIRKET: { etiket: 'Şirket', stopaj: null, kdvli: true, teyitGerekli: false, muhsgkKodu: null },
+      KOOPERATIF: { etiket: 'Kooperatif', stopaj: 'STOPAJ_KVK_15_1B', kdvli: false, teyitGerekli: true, muhsgkKodu: '042' },
+      VAKIF_DERNEK: { etiket: 'Vakıf / dernek', stopaj: 'STOPAJ_94_5B', kdvli: false, teyitGerekli: false, muhsgkKodu: null },
+      KAMU: { etiket: 'Kamu idaresi', stopaj: null, kdvli: false, teyitGerekli: true, muhsgkKodu: null },
+    })
+  })
+
+  it('brüt sözleşme, KDV yok: stopaj ve ödenecek satırları, KDV satırı yok', () => {
+    const r = malikTutari({ tutar: para('3333.33'), bedelTuru: 'BRUT', stopajOrani: yirmi, kdvOrani: SIFIR })
+    expect(r.satirlar).toEqual([
+      { kural: 'K4', aciklama: 'Stopaj', formul: '3333.33 × 20%', sonuc: '666.67' },
+      { kural: 'K4', aciklama: 'Ödenecek (brüt + KDV − stopaj)', formul: '3333.33 + 0.00 − 666.67', sonuc: '2666.66' },
+    ])
+  })
+
+  it('brüt sözleşme, KDV var: KDV satırı stopajdan sonra, ödenecekten önce gelir', () => {
+    const r = malikTutari({ tutar: para('15000'), bedelTuru: 'BRUT', stopajOrani: SIFIR, kdvOrani: yirmi })
+    expect(r.satirlar).toEqual([
+      { kural: 'K4', aciklama: 'Stopaj', formul: '15000.00 × 0%', sonuc: '0.00' },
+      { kural: 'K4', aciklama: 'KDV', formul: '15000.00 × 20%', sonuc: '3000.00' },
+      { kural: 'K4', aciklama: 'Ödenecek (brüt + KDV − stopaj)', formul: '15000.00 + 3000.00 − 0.00', sonuc: '18000.00' },
+    ])
+  })
+
+  it('net sözleşme: brütleştirme ve stopaj satırları', () => {
+    const r = malikTutari({ tutar: para('1000.01'), bedelTuru: 'NET', stopajOrani: yirmi, kdvOrani: SIFIR })
+    expect(r.satirlar).toEqual([
+      { kural: 'K4', aciklama: 'Brütleştirme (net sözleşme)', formul: '1000.01 / (1 − 20/100)', sonuc: '1250.01' },
+      { kural: 'K4', aciklama: 'Stopaj = brüt − net', formul: '1250.01 − 1000.01', sonuc: '250.00' },
+      { kural: 'K4', aciklama: 'Ödenecek (brüt + KDV − stopaj)', formul: '1250.01 + 0.00 − 250.00', sonuc: '1000.01' },
+    ])
+  })
+
+  it('net sözleşmede stopaj oranı sıfırsa brütleştirme yapılmaz', () => {
+    const r = malikTutari({ tutar: para('500'), bedelTuru: 'NET', stopajOrani: SIFIR, kdvOrani: SIFIR })
+    expect(r.brut.toFixed(2)).toBe('500.00')
+    expect(r.satirlar.map((x) => x.aciklama)).toEqual(['Stopaj', 'Ödenecek (brüt + KDV − stopaj)'])
+  })
+})

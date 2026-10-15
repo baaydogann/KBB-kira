@@ -78,3 +78,25 @@ describe('TBK 347 kapsamı', () => {
     expect(tbk347KapsamindaMi('ARSA')).toBe(false)
   })
 })
+
+describe('mutasyon kapısı: azami dönem sınırları ve dahil uçlar', () => {
+  it('odemeDonemleri en çok 2400 dönem üretir', () => {
+    const d = odemeDonemleri({ baslangic: t('2026-01-01'), bitis: null, periyotAy: 1, ufuk: t('2999-12-31') })
+    expect(d).toHaveLength(2400)
+    expect(d[2399]!.sira).toBe(2399)
+  })
+  it('artisTarihleri en çok 2399 tarih üretir (k = 1..2399)', () => {
+    const d = artisTarihleri({ ilkKiraBaslangici: t('2026-01-01'), periyotAy: 1, sonTarih: t('2999-12-31') })
+    expect(d).toHaveLength(2399)
+  })
+  it('artisTarihleri son tarihe eşit artış tarihini dahil eder', () => {
+    expect(artisTarihleri({ ilkKiraBaslangici: t('2026-01-01'), periyotAy: 12, sonTarih: t('2028-01-01') })).toEqual(['2027-01-01', '2028-01-01'])
+    expect(artisTarihleri({ ilkKiraBaslangici: t('2026-01-01'), periyotAy: 12, sonTarih: t('2027-12-31') })).toEqual(['2027-01-01'])
+  })
+  it('odemeDonemleri: sözleşme bitişi doğal dönem bitişine eşitse dönem tamdır', () => {
+    const d = odemeDonemleri({ baslangic: t('2026-01-01'), bitis: t('2026-03-31'), periyotAy: 3, ufuk: t('2030-01-01') })
+    expect(d).toEqual([{ sira: 0, baslangic: '2026-01-01', bitis: '2026-03-31', tam: true }])
+    const kisa = odemeDonemleri({ baslangic: t('2026-01-01'), bitis: t('2026-03-15'), periyotAy: 3, ufuk: t('2030-01-01') })
+    expect(kisa).toEqual([{ sira: 0, baslangic: '2026-01-01', bitis: '2026-03-15', tam: false }])
+  })
+})

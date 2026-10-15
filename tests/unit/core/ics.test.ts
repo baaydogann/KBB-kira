@@ -51,3 +51,21 @@ describe('icsUret', () => {
     expect(birlesik).toContain(`SUMMARY:${uzun}`)
   })
 })
+
+describe('icsUret: 75 oktet katlama sınırı', () => {
+  const satirlar = (baslik: string) => icsUret({ takvimAdi: 'K', olusturma, etkinlikler: [{ uid: 'x', tarih: t('2026-01-01'), baslik, aciklama: '' }] }).split('\r\n')
+  const ozet = `SUMMARY:${'a'.repeat(67)}`
+
+  it('tam 75 oktetlik satır katlanmaz', () => {
+    const l = satirlar('a'.repeat(67))
+    const i = l.indexOf(ozet)
+    expect(i).toBeGreaterThanOrEqual(0)
+    expect(l[i + 1]).toBe('DESCRIPTION:')
+  })
+  it('76. oktet devam satırına geçer (devam satırı tek boşlukla başlar)', () => {
+    const l = satirlar('a'.repeat(68))
+    const i = l.indexOf(ozet)
+    expect(i).toBeGreaterThanOrEqual(0)
+    expect(l[i + 1]).toBe(' a')
+  })
+})

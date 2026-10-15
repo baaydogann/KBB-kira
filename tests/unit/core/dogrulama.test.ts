@@ -43,3 +43,27 @@ describe('maskele', () => {
     expect(maskele('1234', 4)).toBe('1234')
   })
 })
+
+describe('mutasyon kapısı: kimlik doğrulama kenarları', () => {
+  // Algoritmik (sentetik) geçerli kimlikler; hiçbiri gerçek bir kişiye ait değildir.
+  it.each(['35172694894', '57391486272', '46829137572'])('%s: tek ve çift hane toplamları ayrı ayrı etkilidir', (s) => {
+    expect(tcknGecerliMi(s)).toBe(true)
+  })
+  it('TCKN: tam 11 hane ister (geçerli kimliğin önüne/arkasına rakam eklenemez)', () => {
+    expect(tcknGecerliMi('12345678950')).toBe(true)
+    expect(tcknGecerliMi('123456789507')).toBe(false)
+    expect(tcknGecerliMi('012345678950')).toBe(false)
+  })
+  it('TCKN: 10. hane yanlışken 11. hane buna göre tutsa bile reddedilir', () => {
+    // 12345678950'de 10. hane 5; 6 yapılıp 11. hane yeni toplama (51 → 1) göre ayarlandı.
+    expect(tcknGecerliMi('12345678961')).toBe(false)
+  })
+  it.each(['0123456789', '0000000001', '1020304052'])('VKN %s: tmp=9 kolu dahil kontrol hanesi doğru hesaplanır', (s) => {
+    expect(vknGecerliMi(s)).toBe(true)
+  })
+  it('IBAN: tam TR + 24 hane ister (mod-97 tesadüfen tutan ön/son ekler reddedilir)', () => {
+    expect(ibanGecerliMi('TR330006100519786457841326')).toBe(true)
+    expect(ibanGecerliMi('TR33000610051978645784132678')).toBe(false)
+    expect(ibanGecerliMi('76TR330006100519786457841326')).toBe(false)
+  })
+})

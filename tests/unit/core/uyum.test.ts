@@ -19,3 +19,19 @@ describe('uyumUyarilari (spec §6.9)', () => {
     expect(uyumUyarilari({ ...temel, kullanimAmaci: 'HIZMET_BINASI', taslak: false })).toEqual([])
   })
 })
+
+describe('mutasyon kapısı: uyum eşikleri', () => {
+  it('3 aylık ödeme periyodu uyarı vermez; 4 aydan itibaren verir', () => {
+    expect(uyumUyarilari({ ...temel, odemePeriyoduAy: 3 })).toEqual([])
+    expect(uyumUyarilari({ ...temel, odemePeriyoduAy: 4 }).map((u) => u.kod)).toEqual(['GENELGE_ODEME_PERIYODU'])
+  })
+  it('tasarruf genelgesi uyarısı hizmet binası ve lojman taslağında verilir, diğer kullanım amaçlarında verilmez', () => {
+    expect(uyumUyarilari({ ...temel, kullanimAmaci: 'HIZMET_BINASI', taslak: true }).map((u) => u.kod)).toEqual(['TASARRUF_GENELGESI'])
+    expect(uyumUyarilari({ ...temel, kullanimAmaci: 'DEPO', taslak: true })).toEqual([])
+    expect(uyumUyarilari({ ...temel, kullanimAmaci: 'LOJMAN', taslak: true, tasarrufGenelgesiYururlukte: false })).toEqual([])
+  })
+  it('birden çok ihlal birlikte, tanımlı sırayla döner', () => {
+    const u = uyumUyarilari({ ...temel, odemePeriyoduAy: 12, odemeZamani: 'DONEM_SONU', artisPeriyoduAy: 6, kullanimAmaci: 'LOJMAN', taslak: true })
+    expect(u.map((x) => x.kod)).toEqual(['GENELGE_ODEME_PERIYODU', 'GENELGE_DONEM_SONU', 'ARTIS_PERIYODU_KISA', 'TASARRUF_GENELGESI'])
+  })
+})

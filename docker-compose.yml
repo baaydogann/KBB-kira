@@ -1,0 +1,62 @@
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    # max_connections varsayılanı (100) yeterlidir; web 15 + worker 10 bağlantı havuzu için en az 50 gerekir (docs/OPERASYON.md).
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kbbkira}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD gerekli}
+      POSTGRES_DB: ${POSTGRES_DB:-kbbkira}
+      TZ: Europe/Istanbul
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-kbbkira}"]
+      interval: 10s
+      retries: 10
+
+  migrate:
+    image: ${KBB_KIRA_IMAJ:-kbb-kira:latest}
+    build: .
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["sh", "-c", "node migrator/node_modules/prisma/build/index.js migrate deploy && node_modules/.bin/tsx prisma/seed.ts"]
+    restart: "no"
+
+  web:
+    image: ${KBB_KIRA_IMAJ:-kbb-kira:latest}
+    env_file: .env
+    environment:
+      # Bağlantı havuzu (Task 25 incelemesi): .env'deki DATABASE_URL'in sonuna eklenir; .env'deki adres `?schema=public` gibi bir sorgu kısmı içermelidir.
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL gerekli}&connection_limit=15&pool_timeout=30
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-3000}:3000" # controller kararı (Task 14): yalnız ters vekil üzerinden erişim
+    volumes:
+      - belgeler:/data/belgeler
+
+  worker:
+    image: ${KBB_KIRA_IMAJ:-kbb-kira:latest}
+    # SESSION_SECRET de .env'den gelir: worker'ın ortam doğrulaması (ortam()) onu da ister.
+    env_file: .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL gerekli}&connection_limit=10&pool_timeout=30
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: ["node_modules/.bin/tsx", "worker/index.ts"]
+    # İmajın HEALTHCHECK'i web portunu yoklar; worker HTTP sunmadığı için "unhealthy" görünürdü.
+    healthcheck:
+      disable: true
+    volumes:
+      - belgeler:/data/belgeler
+
+volumes:
+  pgdata:
+  belgeler:

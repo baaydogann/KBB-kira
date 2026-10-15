@@ -1,0 +1,15 @@
+node_modules
+.next
+.git
+var
+reports
+.stryker-tmp
+test-results
+playwright-report
+.env
+.env.local
+# Brief'e ek (Task 27): üretilen/yerel çıktılar imaja girmez; Windows'ta üretilmiş Prisma istemcisi Linux imajındakini bozmasın.
+src/generated
+.superpowers
+.maestro
+*.tsbuildinfo

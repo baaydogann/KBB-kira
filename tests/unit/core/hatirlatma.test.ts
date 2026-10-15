@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { tarih as t } from '@/core/tarih'
 import {
-  OTOMATIK_KURALLAR, hatirlatmalariUret, type HatirlatmaKurali, type HatirlatmaVerisi, type SozlesmeOzeti, type TaksitOzeti,
+  EKSIK_VERI_BASLIK, OTOMATIK_KURALLAR, hatirlatmalariUret, type HatirlatmaKurali, type HatirlatmaVerisi, type SozlesmeOzeti, type TaksitOzeti,
 } from '@/core/hatirlatma'
 
 const AYAR = {
@@ -283,5 +283,112 @@ describe('OTOMATIK_KURALLAR', () => {
   })
   it('H13 otomatik kapatılmaz', () => {
     expect(OTOMATIK_KURALLAR).not.toContain('H13')
+  })
+})
+
+describe('mutasyon kapısı: metinler, karar bayrakları ve tarih sınırları', () => {
+  const bir = (v: HatirlatmaVerisi, kural: HatirlatmaKurali) => {
+    const h = bul(v, kural)
+    expect(h).toHaveLength(1)
+    return h[0]!
+  }
+  const artisliSozlesme = (ek: Partial<SozlesmeOzeti> = {}) => sozlesme({
+    ilkKiraBaslangici: t('2025-11-01'), baslangic: t('2025-11-01'), sonKiraDonemiBaslangici: t('2025-11-01'), artisKurali: 'TUFE12', ...ek,
+  })
+
+  it('eksik veri başlıkları tanımlı ve H12 başlığı sözleşme numarasıyla birleşir', () => {
+    expect(EKSIK_VERI_BASLIK).toEqual({
+      IBAN_YOK: "Malik için ödeme IBAN'ı tanımlı değil",
+      HISSE_TOPLAMI: 'Malik hisselerinin toplamı 1 değil',
+      SOZLESME_PDF_YOK: "Sözleşme PDF'i yüklenmemiş",
+      STATU_TEYIT: 'Malik vergi statüsü müşavir teyidi bekliyor',
+      ONAY_BELGESI_YOK: 'Onay belgesi bilgisi eksik',
+    })
+    const h = bul(veri({ sozlesmeler: [sozlesme({ eksikler: ['IBAN_YOK', 'ONAY_BELGESI_YOK'] })] }), 'H12')
+    expect(h.map((x) => x.baslik)).toEqual(["Malik için ödeme IBAN'ı tanımlı değil — S-1", 'Onay belgesi bilgisi eksik — S-1'])
+    expect(h.every((x) => x.oncelik === 'NORMAL' && x.kararGerekli === false && x.aciklama === 'Meram depo' && x.hedefTarih === '2026-10-15')).toBe(true)
+  })
+
+  it('karar gerektirmeyen kurallar kararGerekli=false, gerektirenler true taşır', () => {
+    expect(bir(veri({ planliTaksitler: [taksit('1', '2026-10-20')] }), 'H1').kararGerekli).toBe(false)
+    expect(bir(veri({ planliTaksitler: [taksit('1', '2026-10-30')] }), 'H2').kararGerekli).toBe(false)
+    expect(bir(veri({ sozlesmeler: [sozlesme({ tasinmazTuru: 'KONUT', ilkKiraBaslangici: t('2021-12-01') })] }), 'H7').kararGerekli).toBe(false)
+    expect(bir(veri({ sozlesmeler: [sozlesme({ uzamaSayisi: 10, bitis: t('2027-02-28') })], bugun: t('2026-11-01') }), 'H8').kararGerekli).toBe(false)
+    expect(bir(veri({ bugun: t('2026-09-10'), sonOnayliTufe12Ayi: { yil: 2026, ay: 8 } }), 'H11').kararGerekli).toBe(false)
+    expect(bir(veri({ sozlesmeler: [sozlesme({ eksikler: ['IBAN_YOK'] })] }), 'H12').kararGerekli).toBe(false)
+    expect(bir(veri({ sozlesmeler: [sozlesme({ bitis: t('2026-12-31') })] }), 'H6').kararGerekli).toBe(true)
+    expect(bir(veri({ sozlesmeler: [sozlesme({ tasinmazTuru: 'ARSA', bitis: t('2026-10-01') })] }), 'H6_ARSA').kararGerekli).toBe(true)
+    const p = { anahtar: 'DAMGA_AZAMI', yururlukBitis: t('2026-12-31') }
+    expect(bir(veri({ parametreBitisleri: [p], bugun: t('2026-12-05'), sonOnayliTufe12Ayi: { yil: 2026, ay: 11 } }), 'H13').kararGerekli).toBe(true)
+    expect(bir(veri({ parametreBitisleri: [p], bugun: t('2027-01-01'), sonOnayliTufe12Ayi: { yil: 2026, ay: 11 } }), 'H13').kararGerekli).toBe(true)
+  })
+
+  it('H1 gecikmiş açıklaması gecikme gününü pozitif yazar', () => {
+    const h = bir(veri({ planliTaksitler: [taksit('1', '2026-10-13')] }), 'H1')
+    expect(h.aciklama).toBe('Meram depo: 10.000,00 ₺, vade 13.10.2026 (2 gün gecikti).')
+  })
+
+  it('H4_EKSIK: bekleyen kayıt başka bir seriye aitse TÜFE12 eksikliği yine bildirilir', () => {
+    const v = veri({ sonOnayliTufe12Ayi: { yil: 2026, ay: 8 }, bekleyenEndeksler: [{ id: '7', seri: 'YIUFE_12AY_ORT', ay: { yil: 2026, ay: 9 } }] })
+    expect(bul(v, 'H4_EKSIK').map((x) => x.anahtar)).toEqual(['H4_EKSIK:endeks:2026-09'])
+    expect(bul(v, 'H4').map((x) => x.iliskiliId)).toEqual(['7'])
+  })
+
+  it('H4_EKSIK: hiç onaylı TÜFE12 yoksa yalnızca beklenen ay için üretilir', () => {
+    expect(bul(veri({ sonOnayliTufe12Ayi: null }), 'H4_EKSIK').map((x) => x.anahtar)).toEqual(['H4_EKSIK:endeks:2026-09'])
+  })
+
+  it('H5: artış hükmü olmayan sözleşmede hatırlatma yok', () => {
+    expect(bul(veri({ sozlesmeler: [artisliSozlesme()] }), 'H5')).toHaveLength(1)
+    expect(bul(veri({ sozlesmeler: [artisliSozlesme({ artisKurali: 'YOK' })] }), 'H5')).toHaveLength(0)
+  })
+
+  it('H5: artış kaydı yalnızca aynı sözleşme ve aynı dönem başlangıcı için eşleşir', () => {
+    const baslik = (artislar: HatirlatmaVerisi['artislar']) => bir(veri({ sozlesmeler: [artisliSozlesme()], artislar }), 'H5').baslik
+    expect(baslik([])).toBe('Kira artışı yaklaşıyor — S-1')
+    // Başka sözleşmenin onaylı kaydı bu sözleşmeyi susturmaz.
+    expect(baslik([{ sozlesmeId: '2', donemBaslangic: t('2026-11-01'), durum: 'ONAYLANDI' }])).toBe('Kira artışı yaklaşıyor — S-1')
+    // Aynı sözleşmenin başka dönemine ait onaylı kayıt bu dönemi susturmaz.
+    expect(baslik([{ sozlesmeId: '1', donemBaslangic: t('2025-11-01'), durum: 'ONAYLANDI' }])).toBe('Kira artışı yaklaşıyor — S-1')
+    expect(baslik([{ sozlesmeId: '1', donemBaslangic: t('2026-11-01'), durum: 'BEKLEMEDE' }])).toBe('Kira artışı endeks bekleniyor — S-1')
+    expect(baslik([{ sozlesmeId: '1', donemBaslangic: t('2026-11-01'), durum: 'HESAPLANDI' }])).toBe('Kira artışı onayınızı bekliyor — S-1')
+  })
+
+  it('H5: artış tarihi bugünse KRITIK, gelecekteyse YUKSEK', () => {
+    const bugunku = artisliSozlesme({ ilkKiraBaslangici: t('2025-10-15'), baslangic: t('2025-10-15'), sonKiraDonemiBaslangici: t('2025-10-15') })
+    expect(bir(veri({ sozlesmeler: [bugunku] }), 'H5')).toMatchObject({ anahtar: 'H5:sozlesme:1:2026-10-15', oncelik: 'KRITIK' })
+    expect(bir(veri({ sozlesmeler: [artisliSozlesme()] }), 'H5').oncelik).toBe('YUKSEK')
+  })
+
+  it('H6: bitiş bugünse hâlâ hatırlatılır (kalan gün 0 dahil)', () => {
+    expect(bir(veri({ sozlesmeler: [sozlesme({ bitis: t('2026-10-15') })] }), 'H6').oncelik).toBe('KRITIK')
+  })
+
+  it('arsa: bitiş bugün veya gelecekte H6_ARSA üretmez; yalnızca süre dolunca üretir', () => {
+    const arsa = (bitis: string) => bul(veri({ sozlesmeler: [sozlesme({ tasinmazTuru: 'ARSA', bitis: t(bitis) })] }), 'H6_ARSA')
+    expect(arsa('2026-10-15')).toHaveLength(0)
+    expect(arsa('2026-12-31')).toHaveLength(0)
+    expect(arsa('2026-10-14')).toHaveLength(1)
+    expect(bul(veri({ sozlesmeler: [sozlesme({ tasinmazTuru: 'ARSA', bitis: t('2026-10-15') })] }), 'H6')).toHaveLength(1)
+  })
+
+  it('H7: geçmişte kalan tespit tarihleri atlanır, bugüne denk gelen dahil edilir', () => {
+    const konut = (ilk: string) => sozlesme({ tasinmazTuru: 'KONUT', ilkKiraBaslangici: t(ilk) })
+    expect(bul(veri({ sozlesmeler: [konut('2016-12-01')] }), 'H7').map((x) => x.anahtar)).toEqual(['H7:sozlesme:1:2026-12-01'])
+    expect(bul(veri({ sozlesmeler: [konut('2021-10-15')] }), 'H7').map((x) => x.anahtar)).toEqual(['H7:sozlesme:1:2026-10-15'])
+  })
+
+  it('H8: 10 uzama yılına ulaşılmadıysa veya bitiş yoksa üretilmez', () => {
+    const v = (ek: Partial<SozlesmeOzeti>) => veri({ bugun: t('2026-11-01'), sozlesmeler: [sozlesme({ bitis: t('2027-02-28'), ...ek })] })
+    expect(bul(v({ uzamaSayisi: 9 }), 'H8')).toHaveLength(0)
+    expect(bul(v({ uzamaSayisi: 10 }), 'H8')).toHaveLength(1)
+    expect(bul(v({ uzamaSayisi: 10, bitis: null }), 'H8')).toHaveLength(0)
+  })
+
+  it('H11: bütçe hazırlığı 30 Eylül dahil üretilir, ertesi gün üretilmez; başlık gelecek yılı yazar', () => {
+    const son = bir(veri({ bugun: t('2026-09-30'), sonOnayliTufe12Ayi: { yil: 2026, ay: 8 } }), 'H11')
+    expect(son.baslik).toBe('2027 kira bütçesi hazırlığı')
+    expect(son.hedefTarih).toBe('2026-09-30')
+    expect(bul(veri({ bugun: t('2026-10-01'), sonOnayliTufe12Ayi: { yil: 2026, ay: 9 } }), 'H11')).toHaveLength(0)
   })
 })

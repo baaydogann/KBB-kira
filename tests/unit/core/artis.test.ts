@@ -151,3 +151,102 @@ describe('K2 kurallar', () => {
     ))
   })
 })
+
+describe('mutasyon kapısı: K2 hesap izi ve kenar durumlar', () => {
+  const beklemede = (g: ArtisGirdi) => {
+    const s = artisHesapla(g)
+    if (!s.ok || s.deger.durum !== 'BEKLEMEDE') throw new Error('BEKLEMEDE bekleniyordu')
+    return s.deger
+  }
+
+  it('negatif önceki bedel GECERSIZ_GIRDI hatasıdır', () => {
+    const s = artisHesapla(girdi({ oncekiBedel: para('-1') }))
+    expect(s.ok).toBe(false)
+    if (!s.ok) {
+      expect(s.hata.kod).toBe('GECERSIZ_GIRDI')
+      expect(s.hata.mesaj).toContain('negatif')
+    }
+  })
+
+  it('tavanlı tam hesabın izi: referans ay, sözleşme oranı, tavan, uygulanan oran, yeni bedel', () => {
+    const r = hesaplandi(girdi({}))
+    expect(r.satirlar).toEqual([
+      { kural: 'K2', aciklama: 'Referans ay: Şubat 2026 (dönem başlangıcından bir önceki ay)', formul: '2026-03-01', sonuc: 'Şubat 2026' },
+      { kural: 'K2', aciklama: 'Sözleşme oranı', formul: 'TUFE12', sonuc: '33.39' },
+      { kural: 'K2', aciklama: 'Yasal tavan: TÜFE 12 aylık ortalama değişim (TBK 344)', formul: 'TUFE_12AY_ORT', sonuc: '33.39' },
+      { kural: 'K2', aciklama: 'Uygulanan oran = max(0, min(sözleşme, tavan))', formul: '33.39 / 33.39', sonuc: '33.39' },
+      { kural: 'K2', aciklama: 'Yeni kira bedeli (kuruşa aşağı)', formul: '100000.00 × (1 + 33.39 / 100)', sonuc: '133390.00' },
+    ])
+  })
+
+  it('tavansız (01.07.2020 öncesi kamu işyeri) hesabın izi tavan satırında "-" taşır', () => {
+    const r = hesaplandi(girdi({
+      donemBaslangic: t('2019-05-01'), ilkKiraBaslangici: t('2018-05-01'), kural: 'SABIT', sabitOran: para('30'),
+      oranlar: oranlar({ TUFE_12AY_ORT: {} }),
+    }))
+    expect(r.satirlar.slice(1)).toEqual([
+      { kural: 'K2', aciklama: 'Sözleşme oranı', formul: 'SABIT', sonuc: '30' },
+      { kural: 'K2', aciklama: 'Tavan uygulanmaz (01.07.2020 öncesi kamu işyeri dönemi)', formul: '-', sonuc: '-' },
+      { kural: 'K2', aciklama: 'Uygulanan oran = max(0, min(sözleşme, tavan))', formul: '30 / -', sonuc: '30' },
+      { kural: 'K2', aciklama: 'Yeni kira bedeli (kuruşa aşağı)', formul: '100000.00 × (1 + 30 / 100)', sonuc: '130000.00' },
+    ])
+  })
+
+  it('YOK kuralı ve ilk kira yılı için oran 0 satırının açıklaması ayrışır', () => {
+    const yok = hesaplandi(girdi({ kural: 'YOK' }))
+    expect(yok.satirlar[1]).toEqual({ kural: 'K2', aciklama: 'Sözleşmede artış hükmü yok', formul: 'oran = 0', sonuc: '100000.00' })
+    const ilkYil = hesaplandi(girdi({ donemBaslangic: t('2026-02-01'), ilkKiraBaslangici: t('2025-06-01') }))
+    expect(ilkYil.satirlar[1]).toEqual({
+      kural: 'K2', aciklama: 'İlk kira yılı dolmadan artış yapılmaz (2019 HMB genelgesi md. 2)', formul: 'oran = 0', sonuc: '100000.00',
+    })
+  })
+
+  it('konutta 01.07.2020 öncesi dönemde de tavan uygulanır', () => {
+    const r = hesaplandi(girdi({
+      donemBaslangic: t('2019-05-01'), ilkKiraBaslangici: t('2018-05-01'), tasinmazTuru: 'KONUT', kural: 'SABIT', sabitOran: para('30'),
+      oranlar: oranlar({ TUFE_12AY_ORT: { '2019-04': '20' } }),
+    }))
+    expect(r.tavan?.toString()).toBe('20')
+    expect(r.uygulananOran.toString()).toBe('20')
+  })
+
+  it('işyerinde tavan 2020-07-01 dönem başlangıcında zorunlu hale gelir (sınır dahil)', () => {
+    const r = hesaplandi(girdi({
+      donemBaslangic: t('2020-07-01'), ilkKiraBaslangici: t('2019-07-01'), kural: 'SABIT', sabitOran: para('40'),
+      oranlar: oranlar({ TUFE_12AY_ORT: { '2020-06': '12' } }),
+    }))
+    expect(r.tavan?.toString()).toBe('12')
+    expect(r.uygulananOran.toString()).toBe('12')
+  })
+
+  it('konut sınırı yalnızca konutta uygulanır; işyerinde sınır verilse de TÜFE12 tavandır', () => {
+    const isyeri = hesaplandi(girdi({ tasinmazTuru: 'ISYERI', konutSiniri: para('25') }))
+    expect(isyeri.tavan?.toString()).toBe('33.39')
+    const sinirsizKonut = hesaplandi(girdi({ tasinmazTuru: 'KONUT', konutSiniri: null }))
+    expect(sinirsizKonut.tavan?.toString()).toBe('33.39')
+  })
+
+  it('konutta TÜFE12 yoksa sınır olsa da BEKLEMEDE (endeks eksik, tek seri)', () => {
+    const b = beklemede(girdi({
+      donemBaslangic: t('2026-11-01'), ilkKiraBaslangici: t('2025-11-01'), tasinmazTuru: 'KONUT', konutSiniri: para('25'), kural: 'SABIT', sabitOran: para('10'),
+    }))
+    expect(b.neden).toBe('ENDEKS_YOK')
+    expect(b.eksikSeriler).toEqual(['TUFE_12AY_ORT'])
+  })
+
+  it('sözleşme oranı hazır olsa bile tavan için TÜFE12 eksikse BEKLEMEDE kalır', () => {
+    const b = beklemede(girdi({ donemBaslangic: t('2026-11-01'), ilkKiraBaslangici: t('2025-11-01'), kural: 'SABIT', sabitOran: para('30') }))
+    expect(b.neden).toBe('ENDEKS_YOK')
+    expect(b.eksikSeriler).toEqual(['TUFE_12AY_ORT'])
+  })
+
+  it('(TÜFE + Yİ-ÜFE)/2: bir seri eksikse BEKLEMEDE ve eksik seri listelenir', () => {
+    const baz = { donemBaslangic: t('2026-10-01'), ilkKiraBaslangici: t('2024-10-01'), kural: 'TUFE_YIUFE_ORT' as const }
+    const yiufeYok = beklemede(girdi({ ...baz }))
+    expect(yiufeYok.eksikSeriler).toEqual(['YIUFE_12AY_ORT'])
+    const tufeYok = beklemede(girdi({
+      ...baz, oranlar: oranlar({ TUFE_12AY_ORT: {}, YIUFE_12AY_ORT: { '2026-09': '27.13' } }),
+    }))
+    expect(tufeYok.eksikSeriler).toEqual(['TUFE_12AY_ORT'])
+  })
+})

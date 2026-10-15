@@ -104,3 +104,42 @@ describe('oranAyristir', () => {
     expect(oranAyristir('31,12345').ok).toBe(false)
   })
 })
+
+describe('D yapılandırması (mutasyon kapısı)', () => {
+  it('40 anlamlı basamak ve üstel gösterim eşikleriyle çalışır', () => {
+    expect(new D(1).dividedBy(3).toString()).toBe(`0.${'3'.repeat(40)}`)
+    expect(new D('0.0000001').toString()).toBe('0.0000001')
+    expect(new D('1e-39').toString()).toBe(`0.${'0'.repeat(38)}1`)
+    expect(new D(1).toString()).toBe('1')
+    expect(new D('1e25').toString()).toBe(`1${'0'.repeat(25)}`)
+  })
+})
+
+describe('para() girdi denetimi', () => {
+  it('baştaki ve sondaki boşlukları yok sayar', () => {
+    expect(para('  12.50 ').toFixed(2)).toBe('12.50')
+  })
+  it('sonlu olmayan değerleri reddeder', () => {
+    expect(() => para('Infinity')).toThrow(/Sonlu olmayan sayı: Infinity/)
+    expect(() => para('NaN')).toThrow(/Sonlu olmayan sayı: NaN/)
+  })
+})
+
+describe('ayrıştırıcıların sabitlenmiş kenarları', () => {
+  it('paraAyristir: ₺/TL yalnızca sonda kabul edilir', () => {
+    expect(paraAyristir('₺1.234,56').ok).toBe(false)
+    expect(paraAyristir('TL1234').ok).toBe(false)
+    expect(paraAyristir('1.234,56₺').ok).toBe(true)
+    expect(paraAyristir('1234 tl').ok).toBe(true)
+  })
+  it('oranAyristir: % yalnızca başta kabul edilir ve hata kodu döner', () => {
+    expect(oranAyristir('31,49%').ok).toBe(false)
+    expect(oranAyristir('% 31,49').ok).toBe(true)
+    const s = oranAyristir('abc')
+    expect(s.ok).toBe(false)
+    if (!s.ok) {
+      expect(s.hata.kod).toBe('TUTAR_GECERSIZ')
+      expect(s.hata.mesaj).toContain('Oranı')
+    }
+  })
+})

@@ -27,3 +27,22 @@ describe('endeks değişimleri', () => {
     expect(yillikDegisim(m, { yil: 2026, ay: 1 }).ok).toBe(false)
   })
 })
+
+describe('mutasyon kapısı: yıllık değişimde eksik güncel ay', () => {
+  it('güncel ayın endeksi yoksa o ay için ENDEKS_YOK döner (önceki yıl değerine bakmadan)', () => {
+    const m = tablo()
+    m.delete('2026-09')
+    const s = yillikDegisim(m, { yil: 2026, ay: 9 })
+    expect(s.ok).toBe(false)
+    if (!s.ok) {
+      expect(s.hata.kod).toBe('ENDEKS_YOK')
+      expect(s.hata.mesaj).toBe('2026-09 endeks değeri yok.')
+    }
+  })
+  it('önceki yılın endeksi yoksa o ay raporlanır', () => {
+    const m = tablo()
+    m.delete('2025-09')
+    const s = yillikDegisim(m, { yil: 2026, ay: 9 })
+    expect(!s.ok && s.hata.mesaj).toBe('2025-09 endeks değeri yok.')
+  })
+})
