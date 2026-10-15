@@ -60,7 +60,8 @@ export async function hatirlatmaAyarlari(tarih: Tarih, db: Tx = prisma): Promise
   }
 }
 
-const STATULER: VergiStatusu[] = ['GMSI_GERCEK', 'SERBEST_MESLEK', 'TICARI_AKTIF', 'BASIT_USUL', 'SIRKET', 'KOOPERATIF', 'VAKIF_DERNEK', 'KAMU']
+/** Çekirdekteki statü tablosundan türetilir; yeni bir VergiStatusu eklenirse seed ve okuma onu kendiliğinden kapsar. */
+const STATULER = Object.keys(VARSAYILAN_STATU_KURALLARI) as VergiStatusu[]
 
 const statuSemasi = z.object({
   stopaj: z.enum(['STOPAJ_94_5A', 'STOPAJ_94_5B', 'STOPAJ_KVK_15_1B']).nullable(),
@@ -113,16 +114,46 @@ export interface ParametreGirdisi {
   aciklama: string | null
 }
 
+const SAYISAL_DEGER = /^-?\d+(\.\d+)?$/
+
+/**
+ * Tablo yalnızca eklemeli olduğundan hatalı bir değer sonraki her okumayı bozar; bu yüzden eklemeden önce doğrulanır.
+ * `sonKayit`: anahtarın en son yürürlük kaydı; sayısal bir parametrenin sayısal kalmasını sağlamak için kullanılır.
+ */
+function degerDogrula(anahtar: string, deger: string, sonKayit: { deger: string }): void {
+  if (anahtar.startsWith('STATU_KURALI_')) {
+    let ayristirilan: unknown
+    try {
+      ayristirilan = JSON.parse(deger)
+    } catch {
+      throw new IsKuraliHatasi('DEGER', 'Statü kuralı geçerli bir JSON olmalıdır.', 'deger')
+    }
+    if (!statuSemasi.safeParse(ayristirilan).success) {
+      throw new IsKuraliHatasi('DEGER', 'Statü kuralı şemaya uymuyor: stopaj, kdvli, teyitGerekli ve muhsgkKodu alanları geçerli olmalıdır.', 'deger')
+    }
+    return
+  }
+  if (SAYISAL_DEGER.test(sonKayit.deger) && !SAYISAL_DEGER.test(deger)) {
+    throw new IsKuraliHatasi('DEGER', 'Değer sayısal olmalıdır; ondalık ayracı olarak nokta kullanın, virgül ve binlik ayracı girmeyin (ör. 20 veya 1.89).', 'deger')
+  }
+}
+
 export async function parametreEkle(g: ParametreGirdisi, baglam: IslemBaglami): Promise<number> {
   if (!/^[A-Z0-9_]+$/.test(g.anahtar)) {
     throw new IsKuraliHatasi('ANAHTAR', 'Anahtar yalnızca büyük harf, rakam ve alt çizgi içerebilir.', 'anahtar')
   }
-  if (g.deger.trim() === '') throw new IsKuraliHatasi('DEGER', 'Değer boş olamaz.', 'deger')
+  const deger = g.deger.trim()
+  if (deger === '') throw new IsKuraliHatasi('DEGER', 'Değer boş olamaz.', 'deger')
   if (g.yururlukBitis !== null && karsilastir(g.yururlukBitis, g.yururlukBaslangic) < 0) {
     throw new IsKuraliHatasi('TARIH', 'Yürürlük bitişi başlangıçtan önce olamaz.', 'yururlukBitis')
   }
   try {
     return await prisma.$transaction(async (tx) => {
+      const sonKayit = await tx.parametre.findFirst({ where: { anahtar: g.anahtar }, orderBy: { yururlukBaslangic: 'desc' } })
+      if (!sonKayit) {
+        throw new IsKuraliHatasi('ANAHTAR', `Bilinmeyen parametre anahtarı: ${g.anahtar}. Yeni anahtarlar yalnızca kurulum verisiyle eklenir.`, 'anahtar')
+      }
+      degerDogrula(g.anahtar, deger, sonKayit)
       const acik = await tx.parametre.findFirst({
         where: { anahtar: g.anahtar, yururlukBitis: null, yururlukBaslangic: { lt: dbTarih(g.yururlukBaslangic) } },
       })
@@ -133,7 +164,7 @@ export async function parametreEkle(g: ParametreGirdisi, baglam: IslemBaglami): 
       }
       const yeni = await tx.parametre.create({
         data: {
-          anahtar: g.anahtar, deger: g.deger.trim(), yururlukBaslangic: dbTarih(g.yururlukBaslangic),
+          anahtar: g.anahtar, deger, yururlukBaslangic: dbTarih(g.yururlukBaslangic),
           yururlukBitis: dbTarihOpt(g.yururlukBitis), mevzuatDayanagi: g.mevzuatDayanagi, aciklama: g.aciklama,
         },
       })

@@ -1,4 +1,8 @@
-/** TÜİK yayımlanmış TÜFE 12 aylık ortalamalara göre değişim (%). Kaynak: docs/arastirma/02 §6. */
+/**
+ * TÜFE 12 aylık ortalamalara göre değişim (%). Kaynak: docs/arastirma/02 §6.
+ * Değerlerin bir kısmı yayımlanmış TÜİK değeri değil, endeks düzeylerinden yeniden hesaplanmıştır (±0,01 fark olabilir).
+ * Üretim kullanımından önce TÜİK bültenleriyle karşılaştırılmalıdır.
+ */
 export const TUFE12: Record<string, string> = {
   '2024-10': '62.02', '2024-11': '60.45', '2024-12': '58.51',
   '2025-01': '56.35', '2025-02': '53.83', '2025-03': '51.26', '2025-04': '48.73', '2025-05': '45.80', '2025-06': '43.23',

@@ -61,6 +61,64 @@ describe('parametre servisi', () => {
       .rejects.toBeInstanceOf(IsKuraliHatasi)
   })
 
+  describe('parametreEkle değer doğrulaması', () => {
+    const girdi = (anahtar: string, deger: string) =>
+      ({ anahtar, deger, yururlukBaslangic: t('2027-01-01'), yururlukBitis: null, mevzuatDayanagi: null, aciklama: null })
+
+    it.each(['21,5', '1.234,50', '%21', 'abc'])('sayısal parametreye %s girilemez (nokta ondalıklı sayı beklenir)', async (deger) => {
+      await expect(parametreEkle(girdi('KDV_GENEL', deger), TEST_BAGLAMI))
+        .rejects.toMatchObject({ name: 'IsKuraliHatasi', kod: 'DEGER', alan: 'deger' })
+      // reddedilen ekleme önceki açık kaydı kapatmamış olmalı
+      expect(await parametreGetir('KDV_GENEL', t('2027-02-01'))).toBe('20')
+    })
+
+    it('sayısal parametreye nokta ondalıklı değer girilebilir', async () => {
+      await parametreEkle(girdi('DAMGA_KIRA_BINDE', '2.5'), TEST_BAGLAMI)
+      expect(await parametreGetir('DAMGA_KIRA_BINDE', t('2027-02-01'))).toBe('2.5')
+    })
+
+    it('statü kuralı geçersiz JSON ise reddedilir', async () => {
+      await expect(parametreEkle(girdi('STATU_KURALI_GMSI_GERCEK', '{bozuk json'), TEST_BAGLAMI))
+        .rejects.toMatchObject({ name: 'IsKuraliHatasi', kod: 'DEGER', alan: 'deger' })
+    })
+
+    it('statü kuralı şemaya uymuyorsa reddedilir', async () => {
+      const gecersizler = [
+        '{"stopaj":"STOPAJ_YOK","kdvli":false,"teyitGerekli":false,"muhsgkKodu":"041"}',
+        '{"stopaj":null,"kdvli":true}',
+        '[]',
+      ]
+      for (const deger of gecersizler) {
+        await expect(parametreEkle(girdi('STATU_KURALI_GMSI_GERCEK', deger), TEST_BAGLAMI))
+          .rejects.toMatchObject({ name: 'IsKuraliHatasi', kod: 'DEGER', alan: 'deger' })
+      }
+      expect((await statuKurallari(t('2027-02-01'))).GMSI_GERCEK.stopaj).toBe('STOPAJ_94_5A')
+    })
+
+    it('geçerli statü kuralı eklenebilir ve okunabilir', async () => {
+      await parametreEkle(
+        girdi('STATU_KURALI_GMSI_GERCEK', '{"stopaj":"STOPAJ_94_5B","kdvli":false,"teyitGerekli":true,"muhsgkKodu":"041"}'),
+        TEST_BAGLAMI,
+      )
+      expect((await statuKurallari(t('2027-02-01'))).GMSI_GERCEK).toMatchObject({ stopaj: 'STOPAJ_94_5B', teyitGerekli: true })
+      expect((await statuKurallari(t('2026-12-31'))).GMSI_GERCEK).toMatchObject({ stopaj: 'STOPAJ_94_5A', teyitGerekli: false })
+    })
+
+    it('bilinmeyen anahtar reddedilir ve kayıt oluşmaz', async () => {
+      const once = await prisma.parametre.count()
+      await expect(parametreEkle(girdi('KDV_GENELL', '21'), TEST_BAGLAMI))
+        .rejects.toMatchObject({ name: 'IsKuraliHatasi', kod: 'ANAHTAR', alan: 'anahtar' })
+      expect(await prisma.parametre.count()).toBe(once)
+    })
+
+    it('metin parametre serbesttir ancak boş değer reddedilir', async () => {
+      await parametreEkle(girdi('EKONOMIK_KOD_DEPO', '03.5.5.91'), TEST_BAGLAMI)
+      expect(await parametreGetir('EKONOMIK_KOD_DEPO', t('2027-02-01'))).toBe('03.5.5.91')
+      await expect(parametreEkle(girdi('EKONOMIK_KOD_DEPO', '   '), TEST_BAGLAMI))
+        .rejects.toMatchObject({ name: 'IsKuraliHatasi', kod: 'DEGER' })
+    })
+  })
+
   it('süresi dolmak üzere olan parametreleri listeler', async () => {
     const b = (await parametreBitisleri(t('2026-10-15'))).map((x) => x.anahtar)
     expect(b).toEqual(expect.arrayContaining(['DAMGA_AZAMI', 'TASARRUF_GENELGESI_2024_7', 'TATIL_TAKVIMI_GECERLILIK']))
