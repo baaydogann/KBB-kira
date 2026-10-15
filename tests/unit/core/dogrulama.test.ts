@@ -35,4 +35,11 @@ describe('maskele', () => {
     expect(maskele('TR330006100519786457841326')).toBe('**********************1326')
     expect(maskele('123')).toBe('123')
   })
+  it('gorunen sıfır veya negatifken değerin tamamını açmaz', () => {
+    expect(maskele('12345', 0)).toBe('*****')
+    expect(maskele('12345', -2)).toBe('*****')
+  })
+  it('gorunen değer uzunluğuna eşitken değeri olduğu gibi döner', () => {
+    expect(maskele('1234', 4)).toBe('1234')
+  })
 })

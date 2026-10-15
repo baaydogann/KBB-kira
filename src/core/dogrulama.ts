@@ -47,6 +47,7 @@ export function ibanBicimle(s: string): string {
 }
 
 export function maskele(s: string, gorunen = 4): string {
-  if (s.length <= gorunen) return s
-  return '*'.repeat(s.length - gorunen) + s.slice(-gorunen)
+  const g = gorunen > 0 ? gorunen : 0
+  if (s.length <= g) return s
+  return '*'.repeat(s.length - g) + s.slice(s.length - g)
 }
