@@ -97,10 +97,8 @@ export function Sihirbaz({ baslangicVerisi, secenekler, id, version, belgeId: il
     baslat(async () => {
       try {
         const r = await sozlesmeKaydetAction(v, kayit.id, kayit.version, geciciBelge)
-        if (!r.ok) {
-          setBelgeUyarisi(null)
-          return hataGoster(r.alanHatalari, r.hata)
-        }
+        // "PDF bağlanamadı" uyarısı yalnızca bağlama başarılı olunca ya da PDF yeniden yüklenince kalkar; doğrulama hatası onu silmez.
+        if (!r.ok) return hataGoster(r.alanHatalari, r.hata)
         hataGoster({}, null)
         if (r.belgeHatasi) {
           // Taslak kaydedildi, PDF bağlanamadı: sayfadan ayrılmayıp hata gösterilir; yeniden kaydetmek bağlamayı tekrar dener.

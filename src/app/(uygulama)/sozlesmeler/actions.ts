@@ -1,16 +1,16 @@
 'use server'
 
-import { redirect, unstable_rethrow } from 'next/navigation'
+import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import { tarihAyristir, type Tarih } from '@/core/tarih'
 import { islemBaglami, kullaniciGerekli } from '@/server/auth/gerekli'
 import type { IslemBaglami } from '@/server/baglam'
-import { belgeyiBagla } from '@/server/belge/servis'
-import { prisma } from '@/server/db'
 import { IsKuraliHatasi } from '@/server/hata'
+import { sozlesmeAramaHedefi } from '@/server/sozlesme/arama'
+import { taslakKaydetVeBagla } from '@/server/sozlesme/kaydet'
 import { malikGirdisiSemasi, sozlesmeGirdisiSemasi } from '@/server/sozlesme/sema'
-import { sozlesmeAktiflestir, sozlesmeOnizle, sozlesmeTaslakKaydet, type OnizlemeCiktisi } from '@/server/sozlesme/servis'
+import { sozlesmeAktiflestir, sozlesmeOnizle, type OnizlemeCiktisi } from '@/server/sozlesme/servis'
 import { belirsizSureliyeCevir, malikleriDegistir, sozlesmeFeshet, sozlesmeSonlandir, sozlesmeYenile, taslakSil } from '@/server/sozlesme/yasam-dongusu'
 import { basariDurumu, formKimligi, formMetni, formSurum, hataDurumu, type FormDurumu } from '@/app/_lib/form'
 
@@ -19,50 +19,28 @@ const kimlikSemasi = z.number().int().min(1).max(2_147_483_647)
 const surumSemasi = z.number().int().min(0).max(2_147_483_647)
 
 /**
- * `belgeHatasi` doluysa taslak KAYDEDİLDİ ama PDF bağlanamadı: iki işlem ayrıdır (kayıt geri alınmaz, belge geçici kalır).
- * `version` kaydın yeni sürümüdür; sihirbaz yeniden kaydetmede kopya taslak açmasın diye `id`/`version`ı bununla ilerletir.
+ * `belgeHatasi` doluysa taslak KAYDEDİLDİ ama PDF bağlanamadı (iki ayrı işlem; bkz. `taslakKaydetVeBagla`).
+ * `version` kaydedilmiş satırdan okunur; sihirbaz yeniden kaydetmede kopya taslak açmasın diye `id`/`version`ı bununla ilerletir.
  */
 export type KaydetSonucu =
   | { ok: true; id: number; version: number; belgeHatasi: string | null }
   | ({ ok: false } & FormDurumu)
 
-/** Kayıt sonrası belge bağlama hatasının kullanıcıya gidecek metni; kayıt değişmiş olduğundan genel "kayıt değişmedi" iletisi kullanılmaz. */
-function belgeBaglamaHatasi(e: unknown): string {
-  unstable_rethrow(e)
-  if (e instanceof IsKuraliHatasi) return e.message
-  console.error(e)
-  return 'Beklenmeyen bir hata oluştu.'
-}
-
 export async function sozlesmeKaydetAction(veri: unknown, id: number | null, version: number | null, belgeId: number | null): Promise<KaydetSonucu> {
   const k = await kullaniciGerekli()
   const baglam = await islemBaglami(k)
-  let kayitId: number
-  let yeniSurum: number
-  let bagliBelge: number | null
+  let sonuc: { id: number; version: number; belgeHatasi: string | null }
   try {
     const mevcutId = kimlikSemasi.nullable().parse(id)
     const mevcutSurum = surumSemasi.nullable().parse(version)
-    bagliBelge = kimlikSemasi.nullable().parse(belgeId)
+    const bagliBelge = kimlikSemasi.nullable().parse(belgeId)
     const g = sozlesmeGirdisiSemasi.parse(veri)
-    kayitId = await sozlesmeTaslakKaydet(g, baglam, mevcutId ?? undefined, mevcutSurum ?? undefined)
-    yeniSurum = mevcutId === null ? 0 : (mevcutSurum ?? 0) + 1
+    sonuc = await taslakKaydetVeBagla(g, baglam, mevcutId ?? undefined, mevcutSurum ?? undefined, bagliBelge)
   } catch (e) {
     return { ok: false, ...hataDurumu(e) }
   }
-  // Taslak kaydı ve belge bağlama ayrı işlemlerdir: bağlama başarısızsa taslak yine de kayıtlıdır, hata kullanıcıya iletilir.
-  const belgeHatasi = bagliBelge === null ? null : await belgeyiBaglaSonuc(bagliBelge, kayitId, baglam)
   revalidatePath('/sozlesmeler')
-  return { ok: true, id: kayitId, version: yeniSurum, belgeHatasi }
-}
-
-async function belgeyiBaglaSonuc(belgeId: number, sozlesmeId: number, baglam: IslemBaglami): Promise<string | null> {
-  try {
-    await prisma.$transaction((tx) => belgeyiBagla(tx, belgeId, 'sozlesme', sozlesmeId, baglam))
-    return null
-  } catch (e) {
-    return belgeBaglamaHatasi(e)
-  }
+  return { ok: true, ...sonuc }
 }
 
 export type OnizleSonucu =
@@ -78,6 +56,15 @@ export async function onizleAction(veri: unknown): Promise<OnizleSonucu> {
     const d = hataDurumu(e)
     return { ok: false, mesaj: d.hata ?? 'Önizleme hesaplanamadı.', alanHatalari: d.alanHatalari }
   }
+}
+
+/**
+ * Liste arama kutusu (POST): kimlik numarası/IBAN benzeri girdi adres satırına yazılmasın diye burada çözülür;
+ * redirect hedefine hiçbir zaman yazılmaz (bkz. `sozlesmeAramaHedefi`).
+ */
+export async function sozlesmeAraAction(f: FormData): Promise<void> {
+  await kullaniciGerekli()
+  redirect(sozlesmeAramaHedefi(formMetni(f, 'q'), formMetni(f, 'durum')))
 }
 
 function kimlik(f: FormData): { id: number; version: number } {

@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { prisma } from '@/server/db'
+import { maskele } from '@/core/dogrulama'
 import { tarih as t } from '@/core/tarih'
 import { sozlesmeAktiflestir, sozlesmeTaslakKaydet } from '@/server/sozlesme/servis'
 import { sihirbazSecenekleri, sozlesmeDetayi, sozlesmeListesi, sozlesmeTaslakFormu } from '@/server/sozlesme/sorgu'
@@ -35,6 +36,21 @@ describe('sözleşme sorguları', () => {
     expect(d.kiraDonemleri).toHaveLength(1)
     expect(d.malikler).toHaveLength(1)
     expect(d.olaylar.some((o) => o.eylem === 'AKTIFLESTIR')).toBe(true)
+  })
+
+  it('detay malik satırlarında kişi/IBAN/vekil satırı yoktur; IBAN yalnızca maskeli, kimlik numarası hiç görünmez (KVKK)', async () => {
+    const id = await sozlesmeTaslakKaydet(girdi(h), TEST_BAGLAMI)
+    const d = await sozlesmeDetayi(id, t('2026-10-15'))
+    const m = d.malikler[0]!
+    for (const alan of ['kisi', 'iban', 'vekil']) expect(m, alan).not.toHaveProperty(alan)
+    const tamIban = (await prisma.iban.findUniqueOrThrow({ where: { id: h.ibanA } })).iban
+    const tckn = (await prisma.kisi.findUniqueOrThrow({ where: { id: h.kisiA } })).tckn!
+    expect(m.ibanMaskeli).toBe(maskele(tamIban))
+    expect(m.ibanMaskeli).toMatch(/^\*+\d{4}$/)
+    expect(m.ibanMaskeli).not.toBe(tamIban)
+    const ham = JSON.stringify(d.malikler)
+    expect(ham).not.toContain(tamIban)
+    expect(ham).not.toContain(tckn)
   })
 
   it('taslak formu sihirbazın beklediği biçimde döner', async () => {

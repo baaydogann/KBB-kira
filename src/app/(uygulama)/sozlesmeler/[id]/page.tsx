@@ -37,7 +37,7 @@ export default async function SozlesmeSayfasi({ params, searchParams }: { params
       <div className="mb-4 grid gap-3 rounded-lg border border-slate-200 bg-white p-3 text-sm md:grid-cols-4">
         <div>Durum<br /><Rozet ton={DURUM_TONU[s.durum]}>{DURUM_ETIKETI[s.durum]}</Rozet></div>
         <div>Güncel bedel<br /><strong><ParaMetni deger={s.guncelBedel} /></strong> /{s.bedelTabani === 'AYLIK' ? 'ay' : 'yıl'} ({s.bedelTuru === 'BRUT' ? 'brüt' : 'net'})</div>
-        <div>Bitiş<br /><TarihMetni deger={tarihDbOpt(s.bitis)} />{s.kalanGun !== null ? ` (${s.kalanGun} gün)` : ' (belirsiz süreli)'}</div>
+        <div>Bitiş<br /><TarihMetni deger={tarihDbOpt(s.bitis)} />{s.kalanGun === null ? ' (belirsiz süreli)' : s.durum === 'AKTIF' || s.durum === 'UZADI' ? ` (${s.kalanGun} gün)` : ''}</div>
         <div>Uzama sayısı<br />{s.uzamaSayisi}</div>
       </div>
       {s.uyarilar.length ? <div className="mb-4 space-y-1">{s.uyarilar.map((u) => <Uyari key={u.kod} ton="uyari">{u.mesaj}</Uyari>)}</div> : null}
