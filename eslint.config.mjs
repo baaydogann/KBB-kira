@@ -28,9 +28,10 @@ const config = [
             group: ['@/server/*', '@/app/*', '@/components/*', '@/generated/*', 'next', 'next/*', '@prisma/*', 'node:*', 'react', 'react/*'],
             message: SAF_CEKIRDEK_MESAJI,
           },
-          // Göreli yolla katman atlatmayı da yakalar (../server/db, ../../app/x, ../../../src/server/y);
-          // çekirdek içi göreli importlar (./sonuc, ../para) serbest kalır.
-          { regex: '^(\\.\\./)+(.*/)?(server|app|components|generated)(/|$)', message: SAF_CEKIRDEK_MESAJI },
+          // Göreli yolla katman atlatmayı da yakalar (../server/db, ./../app/x, ../../../src/server/y);
+          // baştaki './' ESLint'te normalize edilmez, bu yüzden önek (\.{1,2}/)* ile yutulur.
+          // Çekirdek içi göreli importlar (./sonuc, ../para, ./../para) serbest kalır.
+          { regex: '^(\\.{1,2}/)*\\.\\./(.*/)?(server|app|components|generated)(/|$)', message: SAF_CEKIRDEK_MESAJI },
         ],
       }],
     },
@@ -52,7 +53,7 @@ const config = [
       'no-restricted-imports': ['error', {
         patterns: [
           { group: ['@/app/*', '@/components/*'], message: SERVIS_MESAJI },
-          { regex: '^(\\.\\./)+(.*/)?(app|components)(/|$)', message: SERVIS_MESAJI },
+          { regex: '^(\\.{1,2}/)*\\.\\./(.*/)?(app|components)(/|$)', message: SERVIS_MESAJI },
         ],
       }],
     },
