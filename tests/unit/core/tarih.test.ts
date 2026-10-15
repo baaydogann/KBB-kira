@@ -16,6 +16,13 @@ describe('tarih doğrulama', () => {
     expect(tarihMi('2026-1-01')).toBe(false)
     expect(() => tarih('2026-04-31')).toThrow()
   })
+  it('yıl 1900–2999 aralığının dışında kalan tarihleri reddeder', () => {
+    expect(tarihMi('0026-01-01')).toBe(false)
+    expect(tarihMi('1899-12-31')).toBe(false)
+    expect(tarihMi('3000-01-01')).toBe(false)
+    expect(tarihMi('1900-01-01')).toBe(true)
+    expect(tarihAyristir('0026-01-01').ok).toBe(false)
+  })
   it('ayinGunSayisi artık yılı bilir', () => {
     expect(ayinGunSayisi(2024, 2)).toBe(29)
     expect(ayinGunSayisi(2026, 2)).toBe(28)

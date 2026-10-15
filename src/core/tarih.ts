@@ -20,7 +20,7 @@ export function tarihMi(s: string): s is Tarih {
   const yil = Number(m[1])
   const ay = Number(m[2])
   const gun = Number(m[3])
-  return ay >= 1 && ay <= 12 && gun >= 1 && gun <= ayinGunSayisi(yil, ay)
+  return yil >= 1900 && yil <= 2999 && ay >= 1 && ay <= 12 && gun >= 1 && gun <= ayinGunSayisi(yil, ay)
 }
 
 export function tarih(s: string): Tarih {
