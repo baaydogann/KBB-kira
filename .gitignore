@@ -1,0 +1,13 @@
+node_modules/
+.next/
+.env
+.env.local
+var/
+src/generated/
+coverage/
+reports/
+.stryker-tmp/
+test-results/
+playwright-report/
+*.tsbuildinfo
+next-env.d.ts

@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: kbbkira
+      POSTGRES_PASSWORD: kbbkira
+      POSTGRES_DB: kbbkira
+      TZ: Europe/Istanbul
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata-dev:/var/lib/postgresql/data
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/01-test-db.sql:ro
+volumes:
+  pgdata-dev:

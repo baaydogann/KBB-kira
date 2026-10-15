@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, Arial, sans-serif;
+  --color-marka: #0b5394;
+  --color-marka-koyu: #073763;
+}
+
+html { color-scheme: light; }
+body { @apply bg-slate-50 text-slate-900 antialiased; }
+.sayi { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
