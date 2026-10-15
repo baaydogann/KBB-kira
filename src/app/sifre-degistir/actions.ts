@@ -10,7 +10,8 @@ export async function sifreDegistirAction(_: FormDurumu, f: FormData): Promise<F
   const k = await kullaniciGerekli({ sifreDegisimiSerbest: true })
   const eski = String(f.get('eski') ?? '')
   const yeni = String(f.get('yeni') ?? '')
-  if (yeni !== String(f.get('yeniTekrar') ?? '')) return { ...BOS_FORM, alanHatalari: { yeniTekrar: 'Şifreler eşleşmiyor.' }, hata: 'Şifreler eşleşmiyor.' }
+  // Tek uyarı: yalnızca alan hatası (üstte aynı metinle ikinci bir uyarı gösterilmez).
+  if (yeni !== String(f.get('yeniTekrar') ?? '')) return { ...BOS_FORM, alanHatalari: { yeniTekrar: 'Şifreler eşleşmiyor.' } }
   const r = await sifreDegistir({ kullaniciId: k.id, oturumId: k.oturumId, eski, yeni, ip: istemciIp(await headers()) })
   if (!r.ok) return { ...BOS_FORM, hata: r.mesaj }
   redirect('/')

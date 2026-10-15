@@ -9,7 +9,7 @@ export function Sekmeler({ sekmeler, aktif, temelUrl, parametre = 'sekme' }: { s
       {sekmeler.map((s) => (
         <Link
           key={s.anahtar}
-          href={`${temelUrl}?${parametre}=${s.anahtar}`}
+          href={`${temelUrl}?${parametre}=${encodeURIComponent(s.anahtar)}`}
           aria-current={s.anahtar === aktif ? 'page' : undefined}
           className={clsx('-mb-px border-b-2 px-3 py-2 text-sm', s.anahtar === aktif ? 'border-marka font-semibold text-marka' : 'border-transparent text-slate-600 hover:text-slate-900')}
         >

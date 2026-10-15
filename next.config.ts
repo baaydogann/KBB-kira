@@ -1,3 +1,4 @@
+import path from 'node:path'
 import type { NextConfig } from 'next'
 
 const gelistirme = process.env.NODE_ENV === 'development'
@@ -19,7 +20,12 @@ const csp = [
   "form-action 'self'",
 ].join('; ')
 
+// Üst dizinlerde başka bir lockfile varsa Next çalışma alanı kökünü yanlış tahmin eder;
+// kök açıkça proje dizini olarak verilir (config yüklenirken __dirname yoksa çalışma dizini).
+const projeKoku = path.resolve(typeof __dirname === 'string' ? __dirname : process.cwd())
+
 const nextConfig: NextConfig = {
+  outputFileTracingRoot: projeKoku,
   serverExternalPackages: ['@node-rs/argon2'],
   async headers() {
     return [

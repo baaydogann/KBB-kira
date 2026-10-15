@@ -1,4 +1,6 @@
 import { kullaniciGerekli } from '@/server/auth/gerekli'
+import { cikisAction } from '@/app/_lib/cikis-actions'
+import { Dugme } from '@/components/ui/dugme'
 import { Uyari } from '@/components/ui/uyari'
 import { SifreFormu } from './sifre-formu'
 
@@ -9,6 +11,7 @@ export default async function SifreDegistirSayfasi() {
       <h1 className="text-lg font-semibold">Şifre değiştir</h1>
       {k.sifreDegismeli ? <Uyari ton="uyari">Devam etmeden önce geçici şifrenizi değiştirin.</Uyari> : null}
       <SifreFormu />
+      <form action={cikisAction}><Dugme type="submit" tur="hayalet" className="w-full">Çıkış</Dugme></form>
     </main>
   )
 }

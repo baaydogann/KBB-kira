@@ -10,7 +10,7 @@ export function Tablo({ children }: { children: ReactNode }) {
 }
 
 export function Th({ className, ...p }: ThHTMLAttributes<HTMLTableCellElement>) {
-  return <th className={clsx('bg-slate-50 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-600', className)} {...p} />
+  return <th scope="col" className={clsx('bg-slate-50 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-600', className)} {...p} />
 }
 
 export function Td({ className, ...p }: TdHTMLAttributes<HTMLTableCellElement>) {

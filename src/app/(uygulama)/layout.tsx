@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { kullaniciGerekli } from '@/server/auth/gerekli'
 import { AnaMenu } from '@/components/ana-menu'
 import { Dugme } from '@/components/ui/dugme'
-import { cikisAction } from './cikis-actions'
+import { cikisAction } from '@/app/_lib/cikis-actions'
 
 export const dynamic = 'force-dynamic'
 

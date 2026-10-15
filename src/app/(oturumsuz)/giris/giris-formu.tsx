@@ -13,7 +13,7 @@ export function GirisFormu() {
     <form action={eylem} className="space-y-4">
       <FormMesaji durum={durum} />
       <Alan etiket="Kullanıcı adı" ad="kullaniciAdi">
-        <Girdi name="kullaniciAdi" autoComplete="username" required autoFocus />
+        <Girdi name="kullaniciAdi" autoComplete="username" defaultValue={durum.degerler?.kullaniciAdi} required autoFocus />
       </Alan>
       <Alan etiket="Şifre" ad="sifre">
         <Girdi name="sifre" type="password" autoComplete="current-password" required />
