@@ -83,13 +83,18 @@ async function referanslariDogrula(db: Tx, g: SozlesmeGirdisi) {
   if (!(await db.birim.findUnique({ where: { id: g.birimId }, select: { id: true } }))) {
     throw new IsKuraliHatasi('BIRIM', 'Birim bulunamadı.', 'birimId')
   }
-  const kisiKimlikleri = [...new Set(g.malikler.flatMap((m) => (m.vekilKisiId === null ? [m.kisiId] : [m.kisiId, m.vekilKisiId])))]
+  return malikReferanslariniDogrula(db, g.malikler)
+}
+
+/** Malik, vekil ve IBAN kimliklerinin varlığı (yaşam döngüsü akışları da malik değişikliğinde kullanır). */
+export async function malikReferanslariniDogrula(db: Tx, malikler: readonly MalikGirdisi[]) {
+  const kisiKimlikleri = [...new Set(malikler.flatMap((m) => (m.vekilKisiId === null ? [m.kisiId] : [m.kisiId, m.vekilKisiId])))]
   const kisiMap = new Map((await db.kisi.findMany({ where: { id: { in: kisiKimlikleri } } })).map((k) => [k.id, k]))
-  if (g.malikler.some((m) => !kisiMap.has(m.kisiId))) throw new IsKuraliHatasi('KISI', 'Malik olarak seçilen kişi bulunamadı.', 'malikler')
-  if (g.malikler.some((m) => m.vekilKisiId !== null && !kisiMap.has(m.vekilKisiId))) {
+  if (malikler.some((m) => !kisiMap.has(m.kisiId))) throw new IsKuraliHatasi('KISI', 'Malik olarak seçilen kişi bulunamadı.', 'malikler')
+  if (malikler.some((m) => m.vekilKisiId !== null && !kisiMap.has(m.vekilKisiId))) {
     throw new IsKuraliHatasi('VEKIL', 'Vekil olarak seçilen kişi bulunamadı.', 'malikler')
   }
-  const ibanKimlikleri = [...new Set(g.malikler.flatMap((m) => (m.ibanId === null ? [] : [m.ibanId])))]
+  const ibanKimlikleri = [...new Set(malikler.flatMap((m) => (m.ibanId === null ? [] : [m.ibanId])))]
   if (ibanKimlikleri.length > 0 && (await db.iban.count({ where: { id: { in: ibanKimlikleri } } })) !== ibanKimlikleri.length) {
     throw new IsKuraliHatasi('IBAN', 'Seçilen IBAN bulunamadı.', 'malikler')
   }
