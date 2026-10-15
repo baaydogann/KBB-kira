@@ -8,6 +8,7 @@ import {
 import { tatilKumesi } from '@/server/tatil/servis'
 import { IsKuraliHatasi } from '@/server/hata'
 import { seedVerisiniYukle } from '../../prisma/seed-veri'
+import { PARAMETRELER } from '../../prisma/seed-veri/parametreler'
 import { TEST_BAGLAMI, temizle } from './yardimci'
 
 beforeEach(async () => {
@@ -75,6 +76,35 @@ describe('parametre servisi', () => {
     it('sayısal parametreye nokta ondalıklı değer girilebilir', async () => {
       await parametreEkle(girdi('DAMGA_KIRA_BINDE', '2.5'), TEST_BAGLAMI)
       expect(await parametreGetir('DAMGA_KIRA_BINDE', t('2027-02-01'))).toBe('2.5')
+    })
+
+    it('tamsayı olarak okunan parametreye ondalıklı değer girilemez', async () => {
+      await expect(parametreEkle(girdi('FARK_VADE_GUN', '7.5'), TEST_BAGLAMI))
+        .rejects.toMatchObject({ name: 'IsKuraliHatasi', kod: 'DEGER', alan: 'deger' })
+      expect(await parametreGetir('FARK_VADE_GUN', t('2027-02-01'))).toBe('10')
+      await parametreEkle(girdi('FARK_VADE_GUN', '7'), TEST_BAGLAMI)
+      expect(await parametreGetir('FARK_VADE_GUN', t('2027-02-01'))).toBe('7')
+    })
+
+    it('parametreTamsayi ile okunan tüm anahtarlar tamsayı kuralına tabidir', async () => {
+      const okunanlar = [
+        ...PARAMETRELER.map((p) => p.anahtar).filter((a) => a.startsWith('HATIRLATMA_')),
+        'TBK347_FESIH_BILDIRIM_GUN', 'TAKVIM_UFUK_AY', 'ARTIS_HESAP_UFUK_GUN', 'FARK_VADE_GUN',
+      ]
+      expect(new Set(okunanlar).size).toBeGreaterThanOrEqual(15)
+      for (const anahtar of new Set(okunanlar)) {
+        await expect(parametreEkle(girdi(anahtar, '7.5'), TEST_BAGLAMI), anahtar)
+          .rejects.toMatchObject({ name: 'IsKuraliHatasi', kod: 'DEGER', alan: 'deger' })
+      }
+    })
+
+    it('oran olarak okunan parametre değeri tamsayı olsa da ondalıklı girilebilir', async () => {
+      await parametreEkle(girdi('KDV_GENEL', '20.5'), TEST_BAGLAMI)
+      expect((await parametreOran('KDV_GENEL', t('2027-02-01'))).toString()).toBe('20.5')
+      await parametreEkle(girdi('STOPAJ_94_5A', '17.5'), TEST_BAGLAMI)
+      expect((await parametreOran('STOPAJ_94_5A', t('2027-02-01'))).toString()).toBe('17.5')
+      await parametreEkle(girdi('TBK344_KONUT_SINIR', '25.5'), TEST_BAGLAMI)
+      expect(await parametreGetir('TBK344_KONUT_SINIR', t('2027-02-01'))).toBe('25.5')
     })
 
     it('statü kuralı geçersiz JSON ise reddedilir', async () => {

@@ -42,6 +42,20 @@ export async function parametreTamsayi(anahtar: string, tarih: Tarih, db: Tx = p
   return Number(s)
 }
 
+/**
+ * `parametreTamsayi` ile okunan anahtarlar (hatirlatmaAyarlari ve ileriki servislerin çağrıları).
+ * `parametreEkle` bunlara yalnızca tamsayı değer kabul eder. Oran olarak (`parametreOran`) okunan anahtarlar
+ * burada olmaz: değeri bugün tamsayı olsa da (KDV_GENEL 20) ondalıklı bir oran girilebilmelidir.
+ * `parametreTamsayi` ile okunan yeni her anahtar buraya eklenmelidir.
+ */
+export const TAMSAYI_PARAMETRELERI: ReadonlySet<string> = new Set([
+  'HATIRLATMA_VADE_GORUNUR_GUN', 'HATIRLATMA_VADE_YUKSEK_GUN', 'HATIRLATMA_ODEME_EMRI_IS_GUNU', 'HATIRLATMA_ARTIS_ONCE_GUN',
+  'HATIRLATMA_BITIS_GORUNUR_GUN', 'HATIRLATMA_BITIS_YUKSEK_GUN', 'HATIRLATMA_BITIS_KRITIK_GUN',
+  'TBK347_FESIH_BILDIRIM_GUN', 'HATIRLATMA_FESIH_SON_GUN_GORUNUR_GUN', 'HATIRLATMA_TESPIT_ONCE_AY',
+  'HATIRLATMA_UZAMA10_ONCE_AY', 'HATIRLATMA_MEVZUAT_ONCE_GUN',
+  'TAKVIM_UFUK_AY', 'ARTIS_HESAP_UFUK_GUN', 'FARK_VADE_GUN',
+])
+
 export async function hatirlatmaAyarlari(tarih: Tarih, db: Tx = prisma): Promise<HatirlatmaAyarlari> {
   const s = (a: string) => parametreTamsayi(a, tarih, db)
   return {
@@ -115,6 +129,7 @@ export interface ParametreGirdisi {
 }
 
 const SAYISAL_DEGER = /^-?\d+(\.\d+)?$/
+const TAMSAYI_DEGER = /^-?\d+$/
 
 /**
  * Tablo yalnızca eklemeli olduğundan hatalı bir değer sonraki her okumayı bozar; bu yüzden eklemeden önce doğrulanır.
@@ -130,6 +145,12 @@ function degerDogrula(anahtar: string, deger: string, sonKayit: { deger: string 
     }
     if (!statuSemasi.safeParse(ayristirilan).success) {
       throw new IsKuraliHatasi('DEGER', 'Statü kuralı şemaya uymuyor: stopaj, kdvli, teyitGerekli ve muhsgkKodu alanları geçerli olmalıdır.', 'deger')
+    }
+    return
+  }
+  if (TAMSAYI_PARAMETRELERI.has(anahtar)) {
+    if (!TAMSAYI_DEGER.test(deger)) {
+      throw new IsKuraliHatasi('DEGER', 'Değer tam sayı olmalıdır; ondalık kısım girmeyin (ör. 7 veya 30).', 'deger')
     }
     return
   }
