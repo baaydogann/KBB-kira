@@ -9,7 +9,7 @@ export interface GozetimSecenekleri {
   simdi?: Date
   /** Zamanlayıcının kendi tetiklemesine tanınan süre; açılış turu 0 verir (kapalıyken kaçan iş hemen yakalanır). */
   toleransMs?: number
-  /** Her işi başlatmadan önce sorulur; true ise tur kalan işleri başlatmadan biter (kapanış). */
+  /** Her işin kararından önce ve işi başlatmadan hemen önce sorulur; true ise tur kalan işleri başlatmadan biter (kapanış). */
   durdu?: () => boolean
 }
 
@@ -18,7 +18,7 @@ export interface GozetimSecenekleri {
  * zamanlanmış anından beri BAŞARILI çalışma var mı bakar, yoksa işi `calistir` ile çalıştırır. Kapalı kalan sunucu, kaçan ya da hatalı
  * biten çalışma böylece kendiliğinden telafi edilir; koşulsuz açılış çalıştırması yoktur. Sıra: takvim → endeks → hatırlatma.
  *
- * - İş zaten çalışıyorsa (taze CALISIYOR kaydı) dokunulmaz; `calistir` yine de işin kendi kilidiyle korunur (`tekKopya`).
+ * - İş zaten çalışıyorsa (CALISIYOR kaydı var ve işin danışma kilidi tutuluyor) dokunulmaz; `calistir` yine de işin kendi kilidiyle korunur (`tekKopya`).
  * - Son çalışması HATALI biten iş 2 saat geri çekilir (`geri-cekil`): sürekli başarısız bir iş (EVDS kapalı) yarım saatte bir yorulmaz.
  * - EVDS anahtarı tanımlı değilse endeks işi atlanır: elle giriş tercihidir, her turda ATLANDI kaydı üretmenin anlamı yok.
  * - Bir işin hatası diğerlerini engellemez; `durdu()` true olunca kalan işler başlatılmaz.
@@ -41,7 +41,7 @@ export async function gozetimTuru(
         continue
       }
       const an = secenek.simdi ?? new Date()
-      const ozet = await isDurumuOzeti(ad, an)
+      const ozet = await isDurumuOzeti(ad)
       if (ozet.calisiyor) {
         sonuclar.push({ ad, karar: 'calisiyor' })
         continue
@@ -53,6 +53,8 @@ export async function gozetimTuru(
         sonuclar.push({ ad, karar })
         continue
       }
+      // Karar verilirken (süpürme, durum sorguları) kapanış istenmiş olabilir: işi başlatmadan hemen önce yeniden sorulur.
+      if (secenek.durdu?.()) break
       await calistir(ad)
       sonuclar.push({ ad, karar: 'calistirildi' })
     } catch (e) {

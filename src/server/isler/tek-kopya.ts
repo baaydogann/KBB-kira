@@ -1,4 +1,4 @@
-import { prisma } from '../db'
+import { prisma, type Tx } from '../db'
 
 /**
  * Kilit tutan işlem: yalnızca danışma kilidini alır ve iş bitene dek açık kalır (satır kilidi, yazma yok). Süre dolarsa Prisma işlemi
@@ -8,6 +8,20 @@ const KILIT_ISLEMI = { timeout: 60 * 60_000, maxWait: 30_000 }
 
 /** Kilit alınamadığında (aynı iş başka bir süreçte/kopyada çalışıyor) iş kaydına ve ekrana yazılan neden. */
 export const BASKA_CALISMA_MESAJI = 'Başka bir çalışma sürüyor; daha sonra tekrar deneyin.'
+
+/**
+ * İşin danışma kilidini BU işlemde dener (alırsa işlem bitene dek tutar). Anahtar tek yerde tanımlıdır: `tekKopya`, takılı kayıt süpürmesi
+ * ve gözetimin "çalışıyor mu" denetimi aynı `hashtext(isAdi)` değerini kullanır, böylece biri kilidi tutuyorsa hepsi görür.
+ */
+export async function isKilidiniDene(tx: Tx, isAdi: string): Promise<boolean> {
+  const [r] = await tx.$queryRaw<{ alindi: boolean }[]>`SELECT pg_try_advisory_xact_lock(hashtext(${isAdi})) AS alindi`
+  return r?.alindi === true
+}
+
+/** İşin kilidi boşsa true (kısa bir işlemde alınıp hemen bırakılır); biri tutuyorsa iş worker'da ya da web sürecinde canlı demektir. */
+export async function isKilidiBosMu(isAdi: string): Promise<boolean> {
+  return prisma.$transaction((tx) => isKilidiniDene(tx, isAdi), { timeout: 10_000, maxWait: 10_000 })
+}
 
 /**
  * Transaction kapsamlı danışma kilidi (`pg_try_advisory_xact_lock`) tutan işlem açar ve `fn`'i onun açık olduğu sürece çalıştırır.
@@ -21,8 +35,7 @@ export const BASKA_CALISMA_MESAJI = 'Başka bir çalışma sürüyor; daha sonra
  */
 export async function tekKopya<T>(isAdi: string, fn: () => Promise<T>): Promise<{ calisti: true; sonuc: T } | { calisti: false }> {
   return prisma.$transaction(async (kilit) => {
-    const [r] = await kilit.$queryRaw<{ alindi: boolean }[]>`SELECT pg_try_advisory_xact_lock(hashtext(${isAdi})) AS alindi`
-    if (!r?.alindi) return { calisti: false as const }
+    if (!(await isKilidiniDene(kilit, isAdi))) return { calisti: false as const }
     return { calisti: true as const, sonuc: await fn() }
   }, KILIT_ISLEMI)
 }

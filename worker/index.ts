@@ -19,6 +19,7 @@ let kapaniyor = false
 
 /** "Bugün" her çalışmanın başında hesaplanır: gözetimin telafi çalışmaları ve gün aşımı sonrası tetiklenen çalışmalar doğru günü kullanır. */
 async function calistir(ad: IsAdi): Promise<void> {
+  if (kapaniyor) return
   const p = isCalistir(ad, () => ISLER[ad](bugunIstanbul()))
   calisanlar.add(p)
   try {

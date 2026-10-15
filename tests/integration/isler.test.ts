@@ -245,6 +245,70 @@ describe('takılı çalışmalar', () => {
     expect(await takiliCalismalariSupur(simdi)).toBe(0)
   })
 
+  it('işi başka bir yerde canlı olan (kilidi tutulan) yaşlı kayıt süpürülmez; kilidi boş olan süpürülür; iş adına göre ayrı ele alınır', async () => {
+    const simdi = new Date()
+    const once = (dakika: number) => new Date(simdi.getTime() - dakika * 60_000)
+    await prisma.isCalisma.createMany({
+      data: [
+        { isAdi: 'takvim-guncelle', baslangic: once(45), durum: 'CALISIYOR' }, // 30 dakikadan uzun süren canlı gece işi
+        { isAdi: 'endeks-cek', baslangic: once(40), durum: 'CALISIYOR' },
+        { isAdi: 'hatirlatma-uret', baslangic: once(20), durum: 'CALISIYOR' },
+      ],
+    })
+    const durumlar = async () => (await prisma.isCalisma.findMany({ orderBy: { id: 'asc' } })).map((k) => [k.isAdi, k.durum])
+
+    // Takvim işinin kilidini (başka bir bağlantıdaki iş gibi) bir işlem tutuyor: o satır korunur, diğer ikisi süpürülür.
+    const r = await tekKopya('takvim-guncelle', () => takiliCalismalariSupur(simdi))
+    expect(r).toEqual({ calisti: true, sonuc: 2 })
+    expect(await durumlar()).toEqual([['takvim-guncelle', 'CALISIYOR'], ['endeks-cek', 'HATALI'], ['hatirlatma-uret', 'HATALI']])
+
+    // İş artık çalışmıyor (kilit bırakıldı): satır takılıdır ve süpürülür; süpürme kilidi bırakmıştır.
+    expect(await takiliCalismalariSupur(simdi)).toBe(1)
+    expect((await durumlar())[0]).toEqual(['takvim-guncelle', 'HATALI'])
+    expect((await tekKopya('takvim-guncelle', async () => 1)).calisti).toBe(true)
+  })
+
+  it('ham danışma kilidi tutan bir işlem de işi canlı gösterir', async () => {
+    const simdi = new Date()
+    await prisma.isCalisma.create({ data: { isAdi: 'ozel-is', baslangic: new Date(simdi.getTime() - 50 * 60_000), durum: 'CALISIYOR' } })
+    let birak: () => void = () => undefined
+    const serbest = new Promise<void>((tamam) => { birak = tamam })
+    let alindi: () => void = () => undefined
+    const hazir = new Promise<void>((tamam) => { alindi = tamam })
+    const tutan = prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('ozel-is'))`
+      alindi()
+      await serbest
+    }, { timeout: 60_000 })
+    await hazir
+    try {
+      expect(await takiliCalismalariSupur(simdi)).toBe(0)
+      expect((await prisma.isCalisma.findFirstOrThrow()).durum).toBe('CALISIYOR')
+    } finally {
+      birak()
+      await tutan
+    }
+    expect(await takiliCalismalariSupur(simdi)).toBe(1)
+  })
+
+  it('bu süreçte yürüyen çalışmanın kimliği yaşlı görünse de süpürülmez (kilidi henüz alınmamış ya da kilitsiz çalışma)', async () => {
+    let birak: (r: IsSonucu) => void = () => undefined
+    const calisma = isCalistir('takvim-guncelle', () => new Promise<IsSonucu>((tamam) => { birak = tamam }))
+    await vi.waitFor(async () => { expect(await prisma.isCalisma.count({ where: { durum: 'CALISIYOR' } })).toBe(1) })
+    await bekle(50)
+    const yirmiDakikaOnce = new Date(Date.now() - 20 * 60_000)
+    await prisma.isCalisma.updateMany({ where: { durum: 'CALISIYOR' }, data: { baslangic: yirmiDakikaOnce } })
+    // Aynı işin yabancı, aynı yaşta kaydı: kilit boş olduğundan yalnızca o süpürülür.
+    await prisma.isCalisma.create({ data: { isAdi: 'takvim-guncelle', baslangic: yirmiDakikaOnce, durum: 'CALISIYOR' } })
+
+    expect(await takiliCalismalariSupur()).toBe(1)
+    const kayitlar = await prisma.isCalisma.findMany({ orderBy: { id: 'asc' } })
+    expect(kayitlar.map((k) => k.durum)).toEqual(['CALISIYOR', 'HATALI'])
+    birak({ ozet: 'ok' })
+    await calisma
+    expect((await prisma.isCalisma.findFirstOrThrow({ orderBy: { id: 'asc' } })).durum).toBe('BASARILI')
+  })
+
   it('kapanış beklemesi dolunca yürüyen çalışma yarıda bırakılmış olarak HATALI işaretlenir', async () => {
     let birak: (r: IsSonucu) => void = () => undefined
     const calisma = isCalistir('takvim-guncelle', () => new Promise<IsSonucu>((tamam) => { birak = tamam }))
@@ -351,16 +415,36 @@ describe('gözetim turu', () => {
     expect(acilis.cagrilar).toContain('takvim-guncelle')
   })
 
-  it('taze CALISIYOR kaydı olan iş çalıştırılmaz; takılı olan her turda süpürülür ve engellemez', async () => {
-    await kayit('takvim-guncelle', '2026-10-16T09:10:00Z', 'CALISIYOR')
-    await kayit('hatirlatma-uret', '2026-10-16T08:00:00Z', 'CALISIYOR')
+  it('CALISIYOR kaydı olan iş yalnızca kilidi tutuluyorsa çalışıyor sayılır (yaştan bağımsız); kilidi boş takılı kayıt süpürülür ve engellemez', async () => {
+    await kayit('takvim-guncelle', '2026-10-16T08:27:00Z', 'CALISIYOR') // 45 dk önce başlamış, hâlâ canlı
+    await kayit('hatirlatma-uret', '2026-10-16T08:32:00Z', 'CALISIYOR') // 40 dk önce başlamış, kilidi boş: takılı
     const d = calistirici()
-    const { supurulen, sonuclar } = await gozetimTuru(d.calistir, { simdi })
+    // Takvim işinin kilidi tutuluyor (başka bir süreçte çalışan iş gibi).
+    const tur = await tekKopya('takvim-guncelle', () => gozetimTuru(d.calistir, { simdi }))
+    expect(tur.calisti).toBe(true)
+    const { supurulen, sonuclar } = tur.calisti ? tur.sonuc : { supurulen: -1, sonuclar: [] }
     expect(supurulen).toBe(1)
     expect(sonuclar.map((s) => [s.ad, s.karar])).toEqual([['takvim-guncelle', 'calisiyor'], ['endeks-cek', 'anahtar-yok'], ['hatirlatma-uret', 'calistirildi']])
-    const takili = await prisma.isCalisma.findFirstOrThrow({ where: { isAdi: 'hatirlatma-uret' } })
-    expect([takili.durum, takili.hata]).toEqual(['HATALI', TAKILI_CALISMA_MESAJI])
-    expect((await gozetimTuru(d.calistir, { simdi })).supurulen).toBe(0)
+    expect(d.cagrilar).toEqual(['hatirlatma-uret'])
+    const takvim = await prisma.isCalisma.findFirstOrThrow({ where: { isAdi: 'takvim-guncelle' } })
+    const hatirlatma = await prisma.isCalisma.findFirstOrThrow({ where: { isAdi: 'hatirlatma-uret' } })
+    expect([takvim.durum, hatirlatma.durum, hatirlatma.hata]).toEqual(['CALISIYOR', 'HATALI', TAKILI_CALISMA_MESAJI])
+
+    // Kilit bırakıldı: takvim kaydı da takılıdır, süpürülür; süreç ölümü kaydı geri çekilme sayılmaz, iş çalıştırılır.
+    const e = calistirici()
+    const ikinci = await gozetimTuru(e.calistir, { simdi })
+    expect(ikinci.supurulen).toBe(1)
+    expect(ikinci.sonuclar.find((s) => s.ad === 'takvim-guncelle')?.karar).toBe('calistirildi')
+    expect(e.cagrilar).toContain('takvim-guncelle')
+    expect((await gozetimTuru(e.calistir, { simdi })).supurulen).toBe(0)
+  })
+
+  it('kilidi boş taze CALISIYOR kaydı işi engellemez (iş az önce çökmüştür) ve henüz süpürülmez', async () => {
+    await kayit('takvim-guncelle', '2026-10-16T09:10:00Z', 'CALISIYOR')
+    const c = calistirici()
+    const { supurulen, sonuclar } = await gozetimTuru(c.calistir, { simdi })
+    expect(supurulen).toBe(0)
+    expect(sonuclar.find((s) => s.ad === 'takvim-guncelle')?.karar).toBe('calistirildi')
   })
 
   it('bir işin hatası diğerlerini engellemez', async () => {
@@ -369,6 +453,17 @@ describe('gözetim turu', () => {
     const { sonuclar } = await gozetimTuru(async (ad) => { cagrilar.push(ad); if (ad === 'endeks-cek') throw new Error('veritabanı koptu') }, { simdi })
     expect(cagrilar).toEqual(['takvim-guncelle', 'endeks-cek', 'hatirlatma-uret'])
     expect(sonuclar.map((s) => s.karar)).toEqual(['calistirildi', 'hata', 'calistirildi'])
+  })
+
+  it('kapanış, karar verildikten sonra ama işi başlatmadan hemen önce istenirse iş başlatılmaz', async () => {
+    sahte.anahtar = 'k'
+    let sorgu = 0
+    const c = calistirici()
+    // 1. soru döngü başında (false), 2. soru calistir'den hemen önce (true).
+    const { sonuclar } = await gozetimTuru(c.calistir, { simdi, durdu: () => ++sorgu > 1 })
+    expect(sorgu).toBe(2)
+    expect(c.cagrilar).toEqual([])
+    expect(sonuclar).toEqual([])
   })
 
   it('kapanış istenince kalan işler başlatılmaz (her işten önce denetlenir)', async () => {

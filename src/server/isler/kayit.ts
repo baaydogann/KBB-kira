@@ -1,6 +1,7 @@
 import type { IsDurumu } from '@/generated/prisma'
 import { bugunIstanbul, parcala } from '@/core/tarih'
 import { prisma } from '../db'
+import { isKilidiBosMu, isKilidiniDene } from './tek-kopya'
 import { EVDS_PENCERESI } from './zamanlama'
 
 export interface IsSonucu {
@@ -51,7 +52,7 @@ export async function isCalistir(isAdi: string, fn: () => Promise<IsSonucu>): Pr
  * Süreç ölümüyle (kapanış beklemesinin dolması, çökme/SIGKILL) HATALI işaretlenen kayıtların iletileri. İşin kendi başarısızlığı
  * değildir: gözetim bu kayıtlara bakıp işi geri çekmez (bkz. `isDurumuOzeti`).
  */
-export const TAKILI_CALISMA_MESAJI = 'Süreç beklenmedik biçimde durdu (başlangıçta temizlendi).'
+export const TAKILI_CALISMA_MESAJI = 'Süreç beklenmedik biçimde durdu (sonradan temizlendi).'
 export const TERK_EDILEN_CALISMA_MESAJI =
   'Kapanış bekleme süresi doldu; çalışma yarıda bırakıldı (tamamlanan işlemler kayıtlı, yarım kalan işlem geri alındı).'
 const SUREC_OLUMU_MESAJLARI: readonly string[] = [TAKILI_CALISMA_MESAJI, TERK_EDILEN_CALISMA_MESAJI]
@@ -67,38 +68,58 @@ export async function yurutulenCalismalariTerket(): Promise<number> {
   return r.count
 }
 
+/** Bu süreden eski CALISIYOR kayıt "takılı olabilir" sayılır; gerçekten takılı olup olmadığına işin danışma kilidi karar verir. */
 const TAKILI_CALISMA_DAKIKA = 15
+const SUPURME_ISLEMI = { timeout: 10_000, maxWait: 10_000 }
 
 /**
- * Süreç ölünce (SIGKILL, elektrik kesintisi) CALISIYOR kalan kayıtlar: `dakika` dakikadan eski olanlar HATALI işaretlenir.
- * Veritabanı işlemi ve danışma kilidi bağlantıyla birlikte düştüğü için yeniden çalışmaya engel değildir; yalnızca ekranı düzeltir.
+ * `dakika` dakikadan eski CALISIYOR kayıtları HATALI işaretler, ama yalnızca işi gerçekten kimse çalıştırmıyorsa: kilit tutan işlem
+ * (`tekKopya`) 60 dakikaya dek yaşayabilir, yaş tek başına canlılığı göstermez. İş adına göre gruplanır; her grup için kısa bir işlemde
+ * işin danışma kilidi denenir:
+ * - alınırsa o işi hiçbir yerde (worker ya da web) çalıştıran yok demektir; satırlar aynı işlemde işaretlenir, kilit commit'te bırakılır;
+ * - alınamazsa iş bir yerde canlıdır; satırlara dokunulmaz.
+ * Bu süreçte şu an yürüyen çalışmaların kimlikleri (`yurutulenler`) hiç aday olmaz (henüz kilidi almamış ya da kilitsiz çalışmalar için).
+ * Süreç ölünce açık işlem ve kilit bağlantıyla birlikte düştüğü için yeniden çalışmaya engel değildir; süpürme yalnızca ekranı düzeltir.
  */
 export async function takiliCalismalariSupur(simdi: Date = new Date(), dakika: number = TAKILI_CALISMA_DAKIKA): Promise<number> {
   const sinir = new Date(simdi.getTime() - dakika * 60_000)
-  const r = await prisma.isCalisma.updateMany({
-    where: { durum: 'CALISIYOR', baslangic: { lt: sinir } },
-    data: { bitis: simdi, durum: 'HATALI', hata: TAKILI_CALISMA_MESAJI },
+  const adaylar = await prisma.isCalisma.findMany({
+    where: { durum: 'CALISIYOR', baslangic: { lt: sinir }, id: { notIn: [...yurutulenler] } },
+    select: { id: true, isAdi: true },
   })
-  return r.count
+  const gruplar = new Map<string, number[]>()
+  for (const a of adaylar) gruplar.set(a.isAdi, [...(gruplar.get(a.isAdi) ?? []), a.id])
+  let toplam = 0
+  for (const [isAdi, idler] of gruplar) {
+    toplam += await prisma.$transaction(async (tx) => {
+      if (!(await isKilidiniDene(tx, isAdi))) return 0
+      const r = await tx.isCalisma.updateMany({
+        where: { id: { in: idler }, durum: 'CALISIYOR' },
+        data: { bitis: simdi, durum: 'HATALI', hata: TAKILI_CALISMA_MESAJI },
+      })
+      return r.count
+    }, SUPURME_ISLEMI)
+  }
+  return toplam
 }
 
 /**
  * Gözetim için bir işin durumu: son başarılı çalışmanın başlangıcı; son çalışması (BASARILI/HATALI) HATALI ise onun başlangıcı;
- * ve (takılı sayılmayacak kadar yeni) çalışan kayıt var mı. Süreç ölümüyle HATALI işaretlenen kayıtlar (`SUREC_OLUMU_MESAJLARI`)
- * "son çalışma" sayılmaz: yeniden başlatma işin hatası değildir, geri çekilmeye yol açmamalı.
+ * ve iş şu an çalışıyor mu. "Çalışıyor": CALISIYOR kaydı var VE işin danışma kilidi tutuluyor (yaştan bağımsız: uzun süren bir iş de
+ * canlıdır; kilit boşsa kayıt takılıdır ve süpürülecektir, işin yeniden çalıştırılmasına engel olmaz). Süreç ölümüyle HATALI işaretlenen
+ * kayıtlar (`SUREC_OLUMU_MESAJLARI`) "son çalışma" sayılmaz: yeniden başlatma işin hatası değildir, geri çekilmeye yol açmamalı.
  */
-export async function isDurumuOzeti(isAdi: string, simdi: Date = new Date()): Promise<{ sonBasari: Date | null; sonHatali: Date | null; calisiyor: boolean }> {
+export async function isDurumuOzeti(isAdi: string): Promise<{ sonBasari: Date | null; sonHatali: Date | null; calisiyor: boolean }> {
   const [basari, sonlar, calisan] = await Promise.all([
     prisma.isCalisma.findFirst({ where: { isAdi, durum: 'BASARILI' }, orderBy: { baslangic: 'desc' }, select: { baslangic: true } }),
     prisma.isCalisma.findMany({
       where: { isAdi, durum: { in: ['BASARILI', 'HATALI'] } }, orderBy: { baslangic: 'desc' }, take: 10, select: { durum: true, baslangic: true, hata: true },
     }),
-    prisma.isCalisma.findFirst({
-      where: { isAdi, durum: 'CALISIYOR', baslangic: { gte: new Date(simdi.getTime() - TAKILI_CALISMA_DAKIKA * 60_000) } }, select: { id: true },
-    }),
+    prisma.isCalisma.findFirst({ where: { isAdi, durum: 'CALISIYOR' }, select: { id: true } }),
   ])
   const son = sonlar.find((k) => k.durum === 'BASARILI' || !SUREC_OLUMU_MESAJLARI.includes(k.hata ?? ''))
-  return { sonBasari: basari?.baslangic ?? null, sonHatali: son?.durum === 'HATALI' ? son.baslangic : null, calisiyor: calisan !== null }
+  const calisiyor = calisan !== null && !(await isKilidiBosMu(isAdi))
+  return { sonBasari: basari?.baslangic ?? null, sonHatali: son?.durum === 'HATALI' ? son.baslangic : null, calisiyor }
 }
 
 export async function sonCalismalar(sayi = 50) {
