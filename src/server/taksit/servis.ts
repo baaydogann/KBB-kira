@@ -5,7 +5,7 @@ import { ayEkle, karsilastir, type Tarih } from '@/core/tarih'
 import type { OdemePeriyodu } from '@/core/tipler'
 import type { Tx } from '../db'
 import { dbTarih, jsonYaz, paraYaz, tarihDb, tarihDbOpt } from '../donustur'
-import { IsKuraliHatasi } from '../hata'
+import { CakismaHatasi, IsKuraliHatasi } from '../hata'
 import { parametreTamsayi } from '../parametre/servis'
 import { kiraDonemiGirdileri } from '../sozlesme/girdi'
 
@@ -17,6 +17,9 @@ export interface PlanOzeti { eklenen: number; guncellenen: number; iptal: number
  */
 export async function taksitPlaniniGuncelle(tx: Tx, sozlesmeId: number, bugun: Tarih): Promise<PlanOzeti> {
   const ozet: PlanOzeti = { eklenen: 0, guncellenen: 0, iptal: 0 }
+  // Sözleşme başına kilit: aynı sözleşmenin taksitlerini okuyup yazan her kod (F2 paket/ödeme emri kodu dahil) önce bu satırı
+  // kilitlemelidir; böylece eşzamanlı iki yeniden üretim taksit_donem_tekil'e çarpmaz ve okuma-yazma arası bayat kalmaz.
+  await tx.$queryRaw`SELECT id FROM sozlesme WHERE id = ${sozlesmeId} FOR UPDATE`
   const s = await tx.sozlesme.findUnique({
     where: { id: sozlesmeId },
     include: {
@@ -64,7 +67,8 @@ export async function taksitPlaniniGuncelle(tx: Tx, sozlesmeId: number, bugun: T
         data: {
           sozlesmeId, tur, donemBaslangic: dbTarih(d.baslangic), donemBitis: dbTarih(d.bitis), vadeTarihi: dbTarih(vade),
           tutar: paraYaz(sonuc.deger.tutar), hesapGoruntusu: jsonYaz(goruntu),
-          durum: odenmis ? 'ODENDI' : 'PLANLANDI', odemeTarihi: odenmis ? dbTarih(vade) : null,
+          // Göçte ödenmiş sayılan satırın gerçek ödeme tarihi bilinmez; vade tarihini ödeme tarihi gibi göstermeyiz.
+          durum: odenmis ? 'ODENDI' : 'PLANLANDI', odemeTarihi: null,
         },
       })
       ozet.eklenen += 1
@@ -75,19 +79,22 @@ export async function taksitPlaniniGuncelle(tx: Tx, sozlesmeId: number, bugun: T
     const degisti = m.tutar.toFixed(2) !== sonuc.deger.tutar.toFixed(2) || tarihDb(m.vadeTarihi) !== vade
       || tarihDb(m.donemBitis) !== d.bitis || m.tur !== tur || eski?.artisBekleniyor !== artisBekleniyor
     if (!degisti) continue
-    await tx.taksit.update({
-      where: { id: m.id },
+    // Okuma ile yazma arasında PAKETTE/ODENDI olan satır yeniden fiyatlanmaz.
+    const r = await tx.taksit.updateMany({
+      where: { id: m.id, durum: 'PLANLANDI' },
       data: {
         tur, donemBitis: dbTarih(d.bitis), vadeTarihi: dbTarih(vade), tutar: paraYaz(sonuc.deger.tutar),
         hesapGoruntusu: jsonYaz(goruntu), version: { increment: 1 },
       },
     })
+    if (r.count === 0) throw new CakismaHatasi()
     ozet.guncellenen += 1
   }
 
   for (const [bas, m] of mevcut) {
     if (gorulen.has(bas) || m.durum !== 'PLANLANDI') continue
-    await tx.taksit.update({ where: { id: m.id }, data: { durum: 'IPTAL', version: { increment: 1 } } })
+    const r = await tx.taksit.updateMany({ where: { id: m.id, durum: 'PLANLANDI' }, data: { durum: 'IPTAL', version: { increment: 1 } } })
+    if (r.count === 0) throw new CakismaHatasi()
     ozet.iptal += 1
   }
   return ozet

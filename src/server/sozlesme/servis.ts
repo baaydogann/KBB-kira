@@ -1,7 +1,7 @@
 import { hisseToplamiBirMi } from '@/core/hisse'
 import { sozlesmeOnizleme, type OnizlemeSatiri } from '@/core/hesap/onizleme'
 import type { KiraDonemiGirdi } from '@/core/hesap/taksit-tutari'
-import { SIFIR, type Para } from '@/core/para'
+import type { Para } from '@/core/para'
 import { ayEkle, bugunIstanbul, enBuyukTarih, enKucukTarih, gunEkle, icindeMi, karsilastir, type Tarih } from '@/core/tarih'
 import type { VergiStatusu } from '@/core/tipler'
 import type { Sozlesme } from '@/generated/prisma'
@@ -74,16 +74,39 @@ function degisenAlanlar(once: Alanlar, sonra: Alanlar, eskiMalikler: readonly Ma
   return alanlar
 }
 
-export async function sozlesmeTaslakKaydet(g: SozlesmeGirdisi, baglam: IslemBaglami, id?: number, version?: number): Promise<number> {
+/**
+ * Birim, malik, vekil ve IBAN kimliklerinin varlığı: bilinmeyen kimlik ham yabancı anahtar hatası (P2003) ya da sessiz
+ * bir varsayılan yerine alanına bağlı iş kuralı hatası verir. Maliklerin ve vekillerin kişi satırlarını kimliğe göre döndürür.
+ * IBAN'ın kime ait olduğu burada değil, aktifleştirmede denetlenir (taslak eksik olabilir).
+ */
+async function referanslariDogrula(db: Tx, g: SozlesmeGirdisi) {
+  if (!(await db.birim.findUnique({ where: { id: g.birimId }, select: { id: true } }))) {
+    throw new IsKuraliHatasi('BIRIM', 'Birim bulunamadı.', 'birimId')
+  }
+  const kisiKimlikleri = [...new Set(g.malikler.flatMap((m) => (m.vekilKisiId === null ? [m.kisiId] : [m.kisiId, m.vekilKisiId])))]
+  const kisiMap = new Map((await db.kisi.findMany({ where: { id: { in: kisiKimlikleri } } })).map((k) => [k.id, k]))
+  if (g.malikler.some((m) => !kisiMap.has(m.kisiId))) throw new IsKuraliHatasi('KISI', 'Malik olarak seçilen kişi bulunamadı.', 'malikler')
+  if (g.malikler.some((m) => m.vekilKisiId !== null && !kisiMap.has(m.vekilKisiId))) {
+    throw new IsKuraliHatasi('VEKIL', 'Vekil olarak seçilen kişi bulunamadı.', 'malikler')
+  }
+  const ibanKimlikleri = [...new Set(g.malikler.flatMap((m) => (m.ibanId === null ? [] : [m.ibanId])))]
+  if (ibanKimlikleri.length > 0 && (await db.iban.count({ where: { id: { in: ibanKimlikleri } } })) !== ibanKimlikleri.length) {
+    throw new IsKuraliHatasi('IBAN', 'Seçilen IBAN bulunamadı.', 'malikler')
+  }
+  return kisiMap
+}
+
+export async function sozlesmeTaslakKaydet(g: SozlesmeGirdisi, baglam: IslemBaglami, id?: number, version?: number, bugun: Tarih = bugunIstanbul()): Promise<number> {
   // Sürümsüz güncelleme iyimser kilidi sessizce düşürürdü.
   if (id !== undefined && version === undefined) throw new IsKuraliHatasi('VERSION', 'Form sürümü eksik; sayfayı yenileyip tekrar deneyin.')
   try {
     return await prisma.$transaction(async (tx) => {
       const tasinmaz = await tx.tasinmaz.findUnique({ where: { id: g.tasinmazId } })
       if (!tasinmaz) throw new IsKuraliHatasi('TASINMAZ', 'Taşınmaz bulunamadı.', 'tasinmazId')
+      await referanslariDogrula(tx, g)
       // Ekonomik kod, geçmişteki sözleşme başlangıcının değil, ileride yapılacak ödemelerin bütçe uygulama niteliğidir:
       // yıllar önce başlamış bir sözleşme göçte bugünkü sınıflandırmayla, ileri tarihli sözleşme kendi başlangıcıyla kodlanır.
-      const ekonomikKod = g.ekonomikKod ?? (await varsayilanEkonomikKod(tasinmaz.tur, tasinmaz.kullanimAmaci, enBuyukTarih(g.baslangic, bugunIstanbul()), tx))
+      const ekonomikKod = g.ekonomikKod ?? (await varsayilanEkonomikKod(tasinmaz.tur, tasinmaz.kullanimAmaci, enBuyukTarih(g.baslangic, bugun), tx))
       const veri = sozlesmeVerisi(g, ekonomikKod)
       let sozlesmeId: number
       if (id === undefined) {
@@ -134,10 +157,11 @@ export type OnizlemeCiktisi =
 
 /** Kaydetmeden önce: geçiş tarihinden (yoksa başlangıçtan) itibaren en çok 24 taksit, bugünkü vergi oranlarıyla. */
 export async function sozlesmeOnizle(g: SozlesmeGirdisi, bugun: Tarih = bugunIstanbul()): Promise<OnizlemeCiktisi> {
-  const kisiler = await prisma.kisi.findMany({ where: { id: { in: g.malikler.map((m) => m.kisiId) } } })
-  const kisiMap = new Map(kisiler.map((k) => [String(k.id), k]))
+  const kisiMap = await referanslariDogrula(prisma, g)
+  const malikKisileri = g.malikler.map((m) => kisiMap.get(m.kisiId)!)
+  const adlar = new Map(malikKisileri.map((k) => [String(k.id), kisiGorunenAd(k)]))
   const oranlar = new Map<VergiStatusu, { stopaj: Para; kdv: Para }>()
-  for (const k of kisiler) {
+  for (const k of malikKisileri) {
     if (!oranlar.has(k.vergiStatusu)) {
       const o = await vergiOranlari(k.vergiStatusu, bugun)
       oranlar.set(k.vergiStatusu, { stopaj: o.stopaj, kdv: o.kdv })
@@ -148,8 +172,8 @@ export async function sozlesmeOnizle(g: SozlesmeGirdisi, bugun: Tarih = bugunIst
     baslangic: g.baslangic, bitis: g.bitis, periyotAy: g.odemePeriyoduAy, zaman: g.odemeZamani,
     vadeKurali: g.vadeKurali, vadeParametresi: g.vadeParametresi, kist: g.kistYontemi, bedelTuru: g.bedelTuru,
     kiraDonemleri: girdiKiraDonemleri(g),
-    malikler: g.malikler.map((m) => ({ kisiId: String(m.kisiId), pay: m.pay, payda: m.payda, statu: kisiMap.get(String(m.kisiId))?.vergiStatusu ?? 'GMSI_GERCEK' })),
-    oranlar: (st) => oranlar.get(st) ?? { stopaj: SIFIR, kdv: SIFIR },
+    malikler: g.malikler.map((m) => ({ kisiId: String(m.kisiId), pay: m.pay, payda: m.payda, statu: kisiMap.get(m.kisiId)!.vergiStatusu })),
+    oranlar: (st) => oranlar.get(st)!,
     ufuk: ayEkle(enBuyukTarih(bugun, ilkSatir), 24),
     azamiSatir: 2400,
   })
@@ -160,28 +184,41 @@ export async function sozlesmeOnizle(g: SozlesmeGirdisi, bugun: Tarih = bugunIst
     satirlar: ilgili.map((r) => ({
       baslangic: r.baslangic, bitis: r.bitis, vade: r.vade, tutar: r.tutar.toFixed(2),
       malikler: r.malikler.map((m) => ({
-        kisiId: m.kisiId, ad: kisiMap.has(m.kisiId) ? kisiGorunenAd(kisiMap.get(m.kisiId)!) : m.kisiId,
+        kisiId: m.kisiId, ad: adlar.get(m.kisiId)!,
         brut: m.brut.toFixed(2), kdv: m.kdv.toFixed(2), stopaj: m.stopaj.toFixed(2), net: m.net.toFixed(2),
       })),
     })),
   }
 }
 
-/** Yenileme zincirinde önceki sözleşmeyi yeni başlangıçtan bir gün önce kapatır. */
-async function oncekiSozlesmeyiKapat(tx: Tx, oncekiId: number, yeniBaslangic: Tarih, baglam: IslemBaglami, bugun: Tarih): Promise<void> {
+/**
+ * Yenileme zincirinde önceki sözleşmeyi yeni başlangıçtan bir gün önce kapatır. Kilit sırası yeni → eski: yeni sözleşme
+ * etkinleştirme sorgusuyla zaten kilitlidir, eskisi burada sürüm koşullu tek güncellemeyle kilitlenir.
+ */
+async function oncekiSozlesmeyiKapat(tx: Tx, oncekiId: number, yeni: { baslangic: Tarih; ilkKiraBaslangici: Tarih }, baglam: IslemBaglami, bugun: Tarih): Promise<void> {
   const o = await tx.sozlesme.findUnique({ where: { id: oncekiId } })
-  if (!o || (o.durum !== 'AKTIF' && o.durum !== 'UZADI')) return
-  const sinir = gunEkle(yeniBaslangic, -1)
+  if (!o) return
+  if (tarihDb(o.ilkKiraBaslangici) !== yeni.ilkKiraBaslangici) {
+    throw new IsKuraliHatasi('YENILEME', 'Yenileme sözleşmesinin ilk kira başlangıcı önceki sözleşmeyle aynı olmalı (TBK 344/347 süreleri).')
+  }
+  if (o.durum !== 'AKTIF' && o.durum !== 'UZADI') return
+  const sinir = gunEkle(yeni.baslangic, -1)
   // sozlesme_tarih_sirasi (bitis >= baslangic) ihlali ham veritabanı hatası yerine anlaşılır bir iş kuralı hatası olsun.
   if (karsilastir(sinir, tarihDb(o.baslangic)) < 0) {
     throw new IsKuraliHatasi('YENILEME', 'Yenileme sözleşmesi, önceki sözleşmenin başlangıcından sonraki bir tarihte başlamalı.')
   }
   const eskiBitis = tarihDbOpt(o.bitis)
   const yeniBitis = eskiBitis === null ? sinir : enKucukTarih(eskiBitis, sinir)
-  await tx.sozlesme.update({ where: { id: oncekiId }, data: { bitis: dbTarih(yeniBitis), version: { increment: 1 } } })
-  await taksitPlaniniGuncelle(tx, oncekiId, bugun)
-  await tx.sozlesme.update({ where: { id: oncekiId }, data: { durum: 'SONA_ERDI', version: { increment: 1 } } })
-  await denetimKaydi(tx, baglam, { varlik: 'sozlesme', varlikId: oncekiId, eylem: 'YENILEME_ILE_SONA_ERDI', once: { bitis: eskiBitis, durum: o.durum }, sonra: { bitis: yeniBitis, durum: 'SONA_ERDI' } })
+  const r = await tx.sozlesme.updateMany({
+    where: { id: o.id, version: o.version },
+    data: { bitis: dbTarih(yeniBitis), durum: 'SONA_ERDI', version: { increment: 1 } },
+  })
+  if (r.count === 0) throw new CakismaHatasi()
+  const plan = await taksitPlaniniGuncelle(tx, o.id, bugun)
+  await denetimKaydi(tx, baglam, {
+    varlik: 'sozlesme', varlikId: o.id, eylem: 'YENILEME_ILE_SONA_ERDI',
+    once: { bitis: eskiBitis, durum: o.durum }, sonra: { bitis: yeniBitis, durum: 'SONA_ERDI', plan },
+  })
 }
 
 export async function sozlesmeAktiflestir(id: number, version: number, baglam: IslemBaglami, bugun: Tarih = bugunIstanbul()): Promise<void> {
@@ -215,8 +252,10 @@ export async function sozlesmeAktiflestir(id: number, version: number, baglam: I
         },
       })
     }
-    if (s.oncekiSozlesmeId !== null) await oncekiSozlesmeyiKapat(tx, s.oncekiSozlesmeId, bas, baglam, bugun)
-    await taksitPlaniniGuncelle(tx, id, bugun)
-    await denetimKaydi(tx, baglam, { varlik: 'sozlesme', varlikId: id, eylem: 'AKTIFLESTIR' })
+    if (s.oncekiSozlesmeId !== null) {
+      await oncekiSozlesmeyiKapat(tx, s.oncekiSozlesmeId, { baslangic: bas, ilkKiraBaslangici: tarihDb(s.ilkKiraBaslangici) }, baglam, bugun)
+    }
+    const plan = await taksitPlaniniGuncelle(tx, id, bugun)
+    await denetimKaydi(tx, baglam, { varlik: 'sozlesme', varlikId: id, eylem: 'AKTIFLESTIR', sonra: { durum: 'AKTIF', plan } })
   }, { timeout: 60_000 })
 }
