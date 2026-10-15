@@ -2,7 +2,7 @@ import { hisseToplamiBirMi } from '@/core/hisse'
 import { sozlesmeOnizleme, type OnizlemeSatiri } from '@/core/hesap/onizleme'
 import type { KiraDonemiGirdi } from '@/core/hesap/taksit-tutari'
 import type { Para } from '@/core/para'
-import { ayEkle, bugunIstanbul, enBuyukTarih, enKucukTarih, gunEkle, icindeMi, karsilastir, type Tarih } from '@/core/tarih'
+import { ayEkle, ayFarki, bugunIstanbul, enBuyukTarih, enKucukTarih, gunEkle, icindeMi, karsilastir, type Tarih } from '@/core/tarih'
 import type { VergiStatusu } from '@/core/tipler'
 import type { Sozlesme } from '@/generated/prisma'
 import type { IslemBaglami } from '../baglam'
@@ -84,6 +84,14 @@ async function referanslariDogrula(db: Tx, g: SozlesmeGirdisi) {
     throw new IsKuraliHatasi('BIRIM', 'Birim bulunamadı.', 'birimId')
   }
   return malikReferanslariniDogrula(db, g.malikler)
+}
+
+/** Ödemenin yapılacağı kişi vekil varsa vekil, yoksa malikin kendisidir; IBAN o kişiye ait ve aktif olmalıdır. */
+export function ibanUygunMu(
+  malik: { kisiId: number; vekilKisiId: number | null },
+  iban: { kisiId: number; aktif: boolean } | null | undefined,
+): boolean {
+  return iban !== null && iban !== undefined && iban.aktif && iban.kisiId === (malik.vekilKisiId ?? malik.kisiId)
 }
 
 /** Malik, vekil ve IBAN kimliklerinin varlığı (yaşam döngüsü akışları da malik değişikliğinde kullanır). */
@@ -214,15 +222,23 @@ async function oncekiSozlesmeyiKapat(tx: Tx, oncekiId: number, yeni: { baslangic
   }
   const eskiBitis = tarihDbOpt(o.bitis)
   const yeniBitis = eskiBitis === null ? sinir : enKucukTarih(eskiBitis, sinir)
+  // Kesim otomatik uzama yıllarına denk geliyorsa, kesimden sonra başlayan uzama yılları hiç yaşanmamış sayılır.
+  const geriAlinanUzama = eskiBitis !== null && karsilastir(sinir, eskiBitis) < 0
+    ? Math.floor(ayFarki(gunEkle(sinir, 1), gunEkle(eskiBitis, 1)) / 12)
+    : 0
+  const uzamaSayisi = Math.max(0, o.uzamaSayisi - geriAlinanUzama)
   const r = await tx.sozlesme.updateMany({
     where: { id: o.id, version: o.version },
-    data: { bitis: dbTarih(yeniBitis), durum: 'SONA_ERDI', version: { increment: 1 } },
+    data: { bitis: dbTarih(yeniBitis), durum: 'SONA_ERDI', uzamaSayisi, version: { increment: 1 } },
   })
   if (r.count === 0) throw new CakismaHatasi()
   const plan = await taksitPlaniniGuncelle(tx, o.id, bugun)
+  // uzamaSayisi yalnızca değiştiyse denetim satırına yazılır (kapanış otomatik uzama yıllarına denk gelmişse).
+  const uzamaDegisti = uzamaSayisi !== o.uzamaSayisi
   await denetimKaydi(tx, baglam, {
     varlik: 'sozlesme', varlikId: o.id, eylem: 'YENILEME_ILE_SONA_ERDI',
-    once: { bitis: eskiBitis, durum: o.durum }, sonra: { bitis: yeniBitis, durum: 'SONA_ERDI', plan },
+    once: { bitis: eskiBitis, durum: o.durum, ...(uzamaDegisti ? { uzamaSayisi: o.uzamaSayisi } : {}) },
+    sonra: { bitis: yeniBitis, durum: 'SONA_ERDI', ...(uzamaDegisti ? { uzamaSayisi } : {}), plan },
   })
 }
 
@@ -235,8 +251,7 @@ export async function sozlesmeAktiflestir(id: number, version: number, baglam: I
     const gecerli = s.malikler.filter((m) => icindeMi(bas, { baslangic: tarihDb(m.gecerlilikBaslangic), bitis: tarihDbOpt(m.gecerlilikBitis) }))
     if (!hisseToplamiBirMi(gecerli)) throw new IsKuraliHatasi('HISSE', 'Başlangıç tarihinde malik hisselerinin toplamı 1 değil.')
     for (const m of gecerli) {
-      const odemeKisisi = m.vekilKisiId ?? m.kisiId
-      if (!m.iban || !m.iban.aktif || m.iban.kisiId !== odemeKisisi) {
+      if (!ibanUygunMu(m, m.iban)) {
         throw new IsKuraliHatasi('IBAN', `${kisiGorunenAd(m.kisi)} için ödemenin yapılacağı kişiye ait aktif bir IBAN seçin.`)
       }
     }

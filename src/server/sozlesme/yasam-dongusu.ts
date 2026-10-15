@@ -1,7 +1,7 @@
 import { hisseToplamiBirMi } from '@/core/hisse'
 import { uzamaBitisi } from '@/core/takvim'
-import { ayEkle, ayFarki, bugunIstanbul, gunEkle, karsilastir, type Tarih } from '@/core/tarih'
-import { tbk347KapsamindaMi } from '@/core/tipler'
+import { ayEkle, ayFarki, bugunIstanbul, formatTarih, gunEkle, karsilastir, type Tarih } from '@/core/tarih'
+import { tbk347KapsamindaMi, type TasinmazTuru } from '@/core/tipler'
 import type { Prisma } from '@/generated/prisma'
 import { SISTEM_BAGLAMI, type IslemBaglami } from '../baglam'
 import { prisma, type Tx } from '../db'
@@ -10,7 +10,7 @@ import { dbTarih, tarihDb, tarihDbOpt } from '../donustur'
 import { BulunamadiHatasi, CakismaHatasi, IsKuraliHatasi, benzersizIhlaliMi } from '../hata'
 import { taksitPlaniniGuncelle } from '../taksit/servis'
 import type { MalikGirdisi } from './sema'
-import { malikReferanslariniDogrula } from './servis'
+import { ibanUygunMu, malikReferanslariniDogrula } from './servis'
 
 /** Taksit planını yeniden üreten işlemler çok sayıda satır yazar; Prisma'nın 5 sn'lik varsayılanı yetmez (aktifleştirmedeki gibi). */
 const PLAN_ISLEMI = { timeout: 60_000 }
@@ -68,7 +68,7 @@ export async function malikleriDegistir(
     await malikReferanslariniDogrula(tx, g.malikler)
     for (const m of g.malikler) {
       const iban = m.ibanId === null ? null : await tx.iban.findUnique({ where: { id: m.ibanId } })
-      if (!iban || !iban.aktif || iban.kisiId !== (m.vekilKisiId ?? m.kisiId)) {
+      if (!ibanUygunMu(m, iban)) {
         throw new IsKuraliHatasi('IBAN', 'Her malik için ödemenin yapılacağı kişiye ait aktif bir IBAN seçin.', 'malikler')
       }
     }
@@ -101,13 +101,28 @@ export async function sozlesmeFeshet(id: number, version: number, g: { tarih: Ta
       data: { durum: 'IPTAL' },
     })
     const plan = await taksitPlaniniGuncelle(tx, id, bugun)
+    // Plan yalnızca PLANLANDI taksitlere dokunur; fesihten sonrasına ait ödeme sürecine girmiş ya da ödenmiş taksitler
+    // olduğu gibi kalır. Sayısı F2'nin alacak/iade işlemleri için işaret olarak denetim satırına yazılır.
+    const islenmis = await tx.taksit.count({
+      where: { sozlesmeId: id, durum: { in: ['PAKETTE', 'ODEME_EMRINDE', 'ODENDI'] }, donemBaslangic: { gte: dbTarih(g.tarih) } },
+    })
     // Fesih nedeni serbest metindir (kişi adı, telefon içerebilir): değeri denetim satırına yazılmaz, yalnız değiştiği belirtilir.
     await denetimKaydi(tx, baglam, {
       varlik: 'sozlesme', varlikId: id, eylem: 'FESHET',
       once: { durum: s.durum },
-      sonra: { durum: 'FESHEDILDI', fesihTarihi: g.tarih, degisenAlanlar: ['durum', 'fesihTarihi', 'fesihNedeni'], iptalEdilenArtis: artis.count, plan },
+      sonra: {
+        durum: 'FESHEDILDI', fesihTarihi: g.tarih, degisenAlanlar: ['durum', 'fesihTarihi', 'fesihNedeni'],
+        iptalEdilenArtis: artis.count, fesihSonrasiIslenmisTaksit: islenmis, plan,
+      },
     })
   }, PLAN_ISLEMI)
+}
+
+/** Yenileme numarası: aynı kökün en büyük `-Yn` soneki + 1 (silinen taslaklar ya da elle verilen numaralar boşluk bırakabilir). */
+async function sonrakiYenilemeNo(tx: Tx, kok: string): Promise<string> {
+  const mevcut = await tx.sozlesme.findMany({ where: { sozlesmeNo: { startsWith: `${kok}-Y` } }, select: { sozlesmeNo: true } })
+  const sonekler = mevcut.map((x) => x.sozlesmeNo.slice(kok.length + 2)).filter((ek) => /^\d{1,9}$/.test(ek)).map(Number)
+  return `${kok}-Y${Math.max(0, ...sonekler) + 1}`
 }
 
 export async function sozlesmeYenile(id: number, baglam: IslemBaglami, bugun: Tarih = bugunIstanbul()): Promise<number> {
@@ -121,16 +136,17 @@ export async function sozlesmeYenile(id: number, baglam: IslemBaglami, bugun: Ta
       if (!e) throw new BulunamadiHatasi('Sözleşme bulunamadı.')
       if (e.sonrakiSozlesme) throw new IsKuraliHatasi('YENILEME', 'Bu sözleşmenin yenileme kaydı zaten var.')
       if (e.durum === 'TASLAK') throw new IsKuraliHatasi('DURUM', 'Taslak sözleşme yenilenemez.')
+      if (e.durum === 'FESHEDILDI') throw new IsKuraliHatasi('YENILEME', 'Feshedilmiş sözleşme yenilenemez; yeni sözleşme girin.')
       const eskiBitis = tarihDbOpt(e.bitis)
       const yeniBaslangic = gunEkle(eskiBitis ?? bugun, 1)
-      const sureAy = eskiBitis === null ? null : ayFarki(tarihDb(e.baslangic), gunEkle(eskiBitis, 1))
+      // Süre: otomatik uzama yılları düşülür; yenileme sözleşmenin ilk süresi kadar olur, geçen toplam süre kadar değil.
+      const sureAy = eskiBitis === null ? null : ayFarki(tarihDb(e.baslangic), gunEkle(eskiBitis, 1)) - 12 * e.uzamaSayisi
       const yeniBitis = sureAy === null || sureAy < 1 ? null : gunEkle(ayEkle(yeniBaslangic, sureAy), -1)
       const sonKd = e.kiraDonemleri[0]
       const kok = e.sozlesmeNo.replace(/-Y\d+$/, '')
-      const onceki = await tx.sozlesme.count({ where: { sozlesmeNo: { startsWith: `${kok}-Y` } } })
       const y = await tx.sozlesme.create({
         data: {
-          sozlesmeNo: `${kok}-Y${onceki + 1}`, tasinmazId: e.tasinmazId, birimId: e.birimId, ekonomikKod: e.ekonomikKod,
+          sozlesmeNo: await sonrakiYenilemeNo(tx, kok), tasinmazId: e.tasinmazId, birimId: e.birimId, ekonomikKod: e.ekonomikKod,
           baslangic: dbTarih(yeniBaslangic), bitis: yeniBitis === null ? null : dbTarih(yeniBitis), ilkKiraBaslangici: e.ilkKiraBaslangici,
           oncekiSozlesmeId: e.id, bedelTutari: sonKd?.bedelTutari ?? e.bedelTutari, bedelTabani: sonKd?.bedelTabani ?? e.bedelTabani,
           bedelTuru: e.bedelTuru, odemePeriyoduAy: e.odemePeriyoduAy, odemeZamani: e.odemeZamani, vadeKurali: e.vadeKurali,
@@ -149,19 +165,32 @@ export async function sozlesmeYenile(id: number, baglam: IslemBaglami, bugun: Ta
       return y.id
     })
   } catch (e) {
-    // Satır kilidi aynı sözleşmenin çift yenilenmesini önler; kalan benzersizlik ihlali yalnızca elle verilmiş çakışan numaradır.
+    // Satır kilidi aynı sözleşmenin çift yenilenmesini önler; kalan benzersizlik ihlali, numarayı okuyup yazma arasında
+    // aynı numarayı kaydeden başka bir işlemdir.
     if (benzersizIhlaliMi(e)) throw new IsKuraliHatasi('SOZLESME_NO', 'Yenileme için üretilen sözleşme numarası başka bir sözleşmede kullanılıyor.')
     throw e
   }
 }
 
+/**
+ * Spec §7.3 arsa kararı (sona erdir / belirsiz süreliye çevir) denetimi: yalnızca bitişi geçmiş, yürürlükteki arsa kirası.
+ * Konut ve çatılı işyeri kendiliğinden uzar (TBK 347); bu kararlar onlar için geçerli değildir. Bitiş tarihini döndürür.
+ */
+async function arsaKarariniDenetle(tx: Tx, s: { tasinmazId: number; durum: string; bitis: Date | null }, bugun: Tarih): Promise<Tarih> {
+  const bitis = tarihDbOpt(s.bitis)
+  if (!aktifMi(s.durum) || bitis === null) throw new IsKuraliHatasi('DURUM', 'Yalnızca belirli süreli, yürürlükteki sözleşme için karar verilebilir.')
+  const tasinmaz = await tx.tasinmaz.findUniqueOrThrow({ where: { id: s.tasinmazId }, select: { tur: true } })
+  if (tbk347KapsamindaMi(tasinmaz.tur)) {
+    throw new IsKuraliHatasi('TUR', 'Konut ve çatılı işyeri sözleşmeleri kendiliğinden uzar (TBK 347); bu karar yalnızca arsa kiraları için verilir.')
+  }
+  if (karsilastir(bitis, bugun) >= 0) throw new IsKuraliHatasi('DURUM', 'Karar, sözleşme bitiş tarihi geçtikten sonra verilir.')
+  return bitis
+}
+
 export async function sozlesmeSonlandir(id: number, version: number, baglam: IslemBaglami, bugun: Tarih = bugunIstanbul()): Promise<void> {
   await prisma.$transaction(async (tx) => {
     const s = await surumIleGetir(tx, id, version)
-    const bitis = tarihDbOpt(s.bitis)
-    if (!aktifMi(s.durum) || bitis === null || karsilastir(bitis, bugun) >= 0) {
-      throw new IsKuraliHatasi('DURUM', 'Yalnızca bitiş tarihi geçmiş, yürürlükteki sözleşme sona erdirilebilir.')
-    }
+    const bitis = await arsaKarariniDenetle(tx, s, bugun)
     await surumArtir(tx, id, version, { durum: 'SONA_ERDI' })
     await denetimKaydi(tx, baglam, { varlik: 'sozlesme', varlikId: id, eylem: 'SONA_ERDI', once: { durum: s.durum, bitis }, sonra: { durum: 'SONA_ERDI' } })
   })
@@ -170,8 +199,7 @@ export async function sozlesmeSonlandir(id: number, version: number, baglam: Isl
 export async function belirsizSureliyeCevir(id: number, version: number, baglam: IslemBaglami, bugun: Tarih = bugunIstanbul()): Promise<void> {
   await prisma.$transaction(async (tx) => {
     const s = await surumIleGetir(tx, id, version)
-    const bitis = tarihDbOpt(s.bitis)
-    if (!aktifMi(s.durum) || bitis === null) throw new IsKuraliHatasi('DURUM', 'Yalnızca belirli süreli, yürürlükteki sözleşme belirsiz süreliye çevrilir.')
+    const bitis = await arsaKarariniDenetle(tx, s, bugun)
     await surumArtir(tx, id, version, { bitis: null })
     const plan = await taksitPlaniniGuncelle(tx, id, bugun)
     await denetimKaydi(tx, baglam, {
@@ -199,53 +227,90 @@ export async function taslakSil(id: number, version: number, baglam: IslemBaglam
   })
 }
 
+interface UzamaAdayi { id: number; sozlesmeNo: string; bitis: Date | null; tasinmaz: { tur: TasinmazTuru; kisaAd: string } }
+
 /**
  * TBK 347: bitişi geçmiş konut/çatılı işyeri sözleşmeleri birer yıl uzar; arsa uzamaz (TBK 327).
  *
  * Aday listesi kilitsiz okunur, bu yüzden bayat olabilir: her sözleşme kilitlenip yeniden okunur ve koşullar yeniden denetlenir
- * (araya giren fesih/sona erme/uzama sözleşmeyi listeden düşürür). Sözleşme başına SAVEPOINT: bir sözleşmedeki CakismaHatasi
- * yalnızca o sözleşmenin yazılarını geri alır, toplu işlem sonraki sözleşmeyle devam eder; atlanan sözleşme ertesi çalışmada yine adaydır.
+ * (araya giren fesih/sona erme/uzama sözleşmeyi listeden düşürür). Sözleşme başına SAVEPOINT: bir sözleşmedeki
+ * CakismaHatasi ya da IsKuraliHatasi yalnızca o sözleşmenin yazılarını geri alır, KRITIK bir UZAMA_HATA hatırlatması yazılır
+ * ve toplu işlem sonraki sözleşmeyle devam eder; atlanan sözleşme ertesi çalışmada yine adaydır. Dönüş: uzatılan sözleşme sayısı.
  */
 export async function otomatikUzat(tx: Tx, bugun: Tarih, baglam: IslemBaglami = SISTEM_BAGLAMI): Promise<number> {
-  const adaylar = await tx.sozlesme.findMany({
+  const adaylar: UzamaAdayi[] = await tx.sozlesme.findMany({
     where: { durum: { in: ['AKTIF', 'UZADI'] }, bitis: { lt: dbTarih(bugun) } },
-    select: { id: true, tasinmaz: { select: { tur: true } } },
+    select: { id: true, sozlesmeNo: true, bitis: true, tasinmaz: { select: { tur: true, kisaAd: true } } },
     orderBy: { id: 'asc' },
   })
   let sayi = 0
   for (const aday of adaylar) {
-    if (!tbk347KapsamindaMi(aday.tasinmaz.tur)) continue
+    const adayBitis = tarihDbOpt(aday.bitis)
+    if (adayBitis === null || !tbk347KapsamindaMi(aday.tasinmaz.tur)) continue
     await tx.$executeRaw`SAVEPOINT otomatik_uzama`
     try {
-      if (await sozlesmeyiUzat(tx, aday.id, bugun, baglam)) sayi += 1
+      if (await sozlesmeyiUzat(tx, aday, bugun, baglam)) sayi += 1
       await tx.$executeRaw`RELEASE SAVEPOINT otomatik_uzama`
     } catch (e) {
-      if (!(e instanceof CakismaHatasi)) throw e
+      if (!(e instanceof CakismaHatasi || e instanceof IsKuraliHatasi)) throw e
       await tx.$executeRaw`ROLLBACK TO SAVEPOINT otomatik_uzama`
+      await tx.$executeRaw`RELEASE SAVEPOINT otomatik_uzama`
+      await uzamaHatasiniBildir(tx, aday, adayBitis, e.message, bugun)
     }
   }
   return sayi
 }
 
 /** Kilitli, yeniden okunmuş sözleşmeyi uzatır; araya giren değişiklikle aday olmaktan çıkmışsa false döner. */
-async function sozlesmeyiUzat(tx: Tx, id: number, bugun: Tarih, baglam: IslemBaglami): Promise<boolean> {
-  await sozlesmeyiKilitle(tx, id)
-  const s = await tx.sozlesme.findUnique({ where: { id } })
+async function sozlesmeyiUzat(tx: Tx, aday: UzamaAdayi, bugun: Tarih, baglam: IslemBaglami): Promise<boolean> {
+  await sozlesmeyiKilitle(tx, aday.id)
+  const s = await tx.sozlesme.findUnique({ where: { id: aday.id } })
   const eski = s?.bitis ? tarihDb(s.bitis) : null
   if (!s || !aktifMi(s.durum) || eski === null || karsilastir(eski, bugun) >= 0) return false
-  // Kaçırılan yıllar tek seferde telafi edilir. Her uzama bir öncekinin bitişinden zincirlenir (çekirdeğin uzamaBitisi'si).
+  // Kaçırılan yıllar tek seferde telafi edilir. Bitiş sözleşme başlangıcına çapalı ay ızgarasındaysa her yıl başlangıçtan
+  // hesaplanır (uzamaBitisi zinciri, 29-31. gün çapalı sözleşmede şubat ayında bir gün kaydırır); ızgara dışındaysa
+  // (elle verilmiş ya da önceden kaymış bitiş) zincirleme kalır, çapaya çekmek gün kaybettirirdi.
+  const bas = tarihDb(s.baslangic)
+  const ay = ayFarki(bas, gunEkle(eski, 1))
+  const capali = gunEkle(ayEkle(bas, ay), -1) === eski
   let yeni = eski
   let yil = 0
   while (karsilastir(yeni, bugun) < 0) {
-    yeni = uzamaBitisi(yeni)
     yil += 1
+    yeni = capali ? gunEkle(ayEkle(bas, ay + 12 * yil), -1) : uzamaBitisi(yeni)
   }
-  await surumArtir(tx, id, s.version, { durum: 'UZADI', bitis: dbTarih(yeni), uzamaSayisi: { increment: yil } })
-  const plan = await taksitPlaniniGuncelle(tx, id, bugun)
+  await surumArtir(tx, aday.id, s.version, { durum: 'UZADI', bitis: dbTarih(yeni), uzamaSayisi: { increment: yil } })
+  const plan = await taksitPlaniniGuncelle(tx, aday.id, bugun)
   await denetimKaydi(tx, baglam, {
-    varlik: 'sozlesme', varlikId: id, eylem: 'OTOMATIK_UZAMA',
+    varlik: 'sozlesme', varlikId: aday.id, eylem: 'OTOMATIK_UZAMA',
     once: { durum: s.durum, bitis: eski, uzamaSayisi: s.uzamaSayisi },
     sonra: { durum: 'UZADI', bitis: yeni, uzamaSayisi: s.uzamaSayisi + yil, plan },
   })
+  // Spec §7.3: kullanıcıya bilgi. Anahtar yeni bitişi taşır; satır varsa (kullanıcı kapatmış olabilir) dokunulmaz.
+  const anahtar = `UZAMA:sozlesme:${aday.id}:${yeni}`
+  await tx.hatirlatma.upsert({
+    where: { anahtar },
+    create: {
+      anahtar, kural: 'UZAMA_BILGI', iliskiliTur: 'sozlesme', iliskiliId: String(aday.id), sozlesmeId: aday.id,
+      baslik: `Sözleşme kendiliğinden uzadı — ${s.sozlesmeNo}`,
+      aciklama: `${aday.tasinmaz.kisaAd}: TBK 347 uyarınca ${formatTarih(yeni)} tarihine kadar uzadı.`,
+      hedefTarih: dbTarih(gunEkle(eski, 1)), gorunurTarih: dbTarih(bugun), oncelik: 'NORMAL', kararGerekli: false,
+    },
+    update: {},
+  })
   return true
+}
+
+/** Uzatılamayan sözleşme için karar gerektiren KRITIK hatırlatma; ileti Türkçe iş kuralı iletisidir (kişisel veri içermez). */
+async function uzamaHatasiniBildir(tx: Tx, aday: UzamaAdayi, eskiBitis: Tarih, mesaj: string, bugun: Tarih): Promise<void> {
+  const anahtar = `UZAMA_HATA:sozlesme:${aday.id}:${eskiBitis}`
+  await tx.hatirlatma.upsert({
+    where: { anahtar },
+    create: {
+      anahtar, kural: 'UZAMA_HATA', iliskiliTur: 'sozlesme', iliskiliId: String(aday.id), sozlesmeId: aday.id,
+      baslik: `Otomatik uzama yapılamadı — ${aday.sozlesmeNo}`, aciklama: mesaj,
+      hedefTarih: dbTarih(gunEkle(eskiBitis, 1)), gorunurTarih: dbTarih(bugun), oncelik: 'KRITIK', kararGerekli: true,
+    },
+    update: { aciklama: mesaj },
+  })
 }
