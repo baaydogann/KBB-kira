@@ -58,9 +58,13 @@ export function taksitTutari(g: TaksitTutariGirdi): Sonuc<TaksitTutari> {
 function yillikKesinParca(g: TaksitTutariGirdi, kd: KiraDonemiGirdi, bas: Tarih, bit: Tarih): Parca | null {
   if (kd.taban !== 'YILLIK') return null
   if (bas !== g.donem.baslangic || bit !== g.donem.bitis) return null
-  const m = ayFarki(kd.baslangic, g.donem.baslangic)
-  if (ayEkle(kd.baslangic, m) !== g.donem.baslangic || m % g.periyotAy !== 0) return null
-  if (g.donem.bitis !== gunEkle(ayEkle(kd.baslangic, m + g.periyotAy), -1)) return null
+  const i = ayFarki(g.kiraAyiCapasi, g.donem.baslangic)
+  if (ayEkle(g.kiraAyiCapasi, i) !== g.donem.baslangic) return null
+  if (g.donem.bitis !== gunEkle(ayEkle(g.kiraAyiCapasi, i + g.periyotAy), -1)) return null
+  const s0 = ayFarki(g.kiraAyiCapasi, kd.baslangic)
+  if (ayEkle(g.kiraAyiCapasi, s0) !== kd.baslangic) return null
+  const m = i - s0
+  if (m < 0 || m % g.periyotAy !== 0) return null
   const adet = 12 / g.periyotAy
   const j = (m / g.periyotAy) % adet
   const parca = yuvarla(kd.bedel.times(g.periyotAy).dividedBy(12), 'ASAGI')

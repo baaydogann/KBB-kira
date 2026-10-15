@@ -59,6 +59,23 @@ describe('K1 yıllık taban', () => {
   it('kira dönemi ödeme dönemine hizalı değilse aylık eşdeğerle hesaplar', () => {
     expect(hesapla('2026-02-01', '2026-02-28', 1, [kd('2026-01-15', null, '120000', 'YILLIK')], 'GERCEK_GUN', '2026-01-01')).toBe('10000.00')
   })
+  it('şubat sonunda başlayan sözleşmede ikinci yıl taksitleri bedeli tam toplar', () => {
+    const capa = t('2024-02-29')
+    const donemler: KiraDonemiGirdi[] = [
+      { id: '1', baslangic: capa, bitis: t('2025-02-27'), bedel: para('100000.00'), taban: 'YILLIK' },
+      { id: '2', baslangic: ayEkle(capa, 12), bitis: null, bedel: para('100079.20'), taban: 'YILLIK' },
+    ]
+    let toplam = new D(0)
+    for (let i = 0; i < 12; i++) {
+      const s = taksitTutari({
+        donem: { baslangic: ayEkle(capa, 12 + i), bitis: gunEkle(ayEkle(capa, 13 + i), -1) },
+        periyotAy: 1, kiraAyiCapasi: capa, kiraDonemleri: donemler, kist: 'GERCEK_GUN',
+      })
+      if (!s.ok) throw new Error(s.hata.mesaj)
+      toplam = toplam.plus(s.deger.tutar)
+    }
+    expect(toplam.toFixed(2)).toBe('100079.20')
+  })
   it('özellik: bir kira yılındaki taksitlerin toplamı yıllık bedele eşittir', () => {
     fc.assert(fc.property(
       fc.bigInt({ min: 1n, max: 10n ** 11n }),
