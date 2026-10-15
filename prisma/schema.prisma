@@ -1,0 +1,562 @@
+generator client {
+  provider      = "prisma-client-js"
+  output        = "../src/generated/prisma"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TasinmazTuru {
+  BINA
+  ISYERI
+  ARSA
+  DEPO
+  KONUT
+}
+
+enum KullanimAmaci {
+  HIZMET_BINASI
+  LOJMAN
+  DEPO
+  OTOPARK
+  SOSYAL_TESIS
+  DIGER
+}
+
+enum KisiTipi {
+  GERCEK
+  TUZEL
+}
+
+enum VergiStatusu {
+  GMSI_GERCEK
+  SERBEST_MESLEK
+  TICARI_AKTIF
+  BASIT_USUL
+  SIRKET
+  KOOPERATIF
+  VAKIF_DERNEK
+  KAMU
+}
+
+enum BedelTabani {
+  AYLIK
+  YILLIK
+}
+
+enum BedelTuru {
+  BRUT
+  NET
+}
+
+enum OdemeZamani {
+  PESIN
+  DONEM_SONU
+}
+
+enum VadeKurali {
+  DONEM_BASI_ARTI_GUN
+  AYIN_GUNU
+  DONEM_SONU_ARTI_GUN
+}
+
+enum ArtisKurali {
+  TUFE12
+  YIUFE
+  TUFE_YIUFE_ORT
+  SABIT
+  YOK
+  ELLE
+}
+
+enum DegisimTuru {
+  ON_IKI_AY_ORT
+  YILLIK
+}
+
+enum KistYontemi {
+  GERCEK_GUN
+  OTUZ_GUN
+}
+
+enum DamgaTahsil {
+  ISTIHKAKTAN
+  MALIK_BEYAN
+}
+
+enum IhaleDayanagi {
+  DT_4734_22E
+  PZ_2886_51L
+  DIGER
+}
+
+enum SozlesmeDurumu {
+  TASLAK
+  AKTIF
+  UZADI
+  FESHEDILDI
+  SONA_ERDI
+}
+
+enum KiraDonemiKaynagi {
+  ILK
+  ARTIS
+  TESPIT
+  ANLASMA
+  ELLE
+}
+
+enum ArtisDurumu {
+  BEKLEMEDE
+  HESAPLANDI
+  ONAYLANDI
+  IPTAL
+}
+
+enum TaksitTuru {
+  NORMAL
+  FARK
+  KIST
+}
+
+enum TaksitDurumu {
+  PLANLANDI
+  PAKETTE
+  ODEME_EMRINDE
+  ODENDI
+  IPTAL
+}
+
+enum OranSerisi {
+  TUFE_12AY_ORT
+  TUFE_YILLIK
+  YIUFE_12AY_ORT
+  YIUFE_YILLIK
+}
+
+enum EndeksKaynagi {
+  EVDS
+  ELLE
+}
+
+enum OnayDurumu {
+  BEKLIYOR
+  ONAYLANDI
+}
+
+enum HatirlatmaDurumu {
+  ACIK
+  TAMAMLANDI
+  ERTELENDI
+  OTOMATIK_KAPANDI
+}
+
+enum Oncelik {
+  KRITIK
+  YUKSEK
+  NORMAL
+}
+
+enum BelgeTuru {
+  SOZLESME
+  TAPU
+  ONAY_BELGESI
+  PIYASA_ARASTIRMA
+  BORC_YAZISI
+  FATURA
+  EK_PROTOKOL
+  MAHKEME_KARARI
+  DAMGA_MAKBUZU
+  DIGER
+}
+
+enum IsDurumu {
+  CALISIYOR
+  BASARILI
+  HATALI
+  ATLANDI
+}
+
+model Kullanici {
+  id                Int       @id @default(autoincrement())
+  kullaniciAdi      String    @unique @map("kullanici_adi")
+  adSoyad           String    @map("ad_soyad")
+  sifreHash         String    @map("sifre_hash")
+  aktif             Boolean   @default(true)
+  sifreDegismeli    Boolean   @default(true) @map("sifre_degismeli")
+  hataliGirisSayisi Int       @default(0) @map("hatali_giris_sayisi")
+  kilitBitis        DateTime? @map("kilit_bitis") @db.Timestamptz(3)
+  sonGiris          DateTime? @map("son_giris") @db.Timestamptz(3)
+  icsTokenHash      String?   @unique @map("ics_token_hash")
+  olusturmaZamani   DateTime  @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
+  guncellemeZamani  DateTime  @updatedAt @map("guncelleme_zamani") @db.Timestamptz(3)
+  oturumlar         Oturum[]
+
+  @@map("kullanici")
+}
+
+model Oturum {
+  id              Int       @id @default(autoincrement())
+  kullaniciId     Int       @map("kullanici_id")
+  kullanici       Kullanici @relation(fields: [kullaniciId], references: [id], onDelete: Cascade)
+  tokenHash       String    @unique @map("token_hash")
+  bitis           DateTime  @db.Timestamptz(3)
+  mutlakBitis     DateTime  @map("mutlak_bitis") @db.Timestamptz(3)
+  iptalZamani     DateTime? @map("iptal_zamani") @db.Timestamptz(3)
+  ip              String?
+  userAgent       String?   @map("user_agent")
+  olusturmaZamani DateTime  @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
+
+  @@index([kullaniciId])
+  @@map("oturum")
+}
+
+model Birim {
+  id                      Int        @id @default(autoincrement())
+  ad                      String     @unique
+  kurumsalKod             String     @map("kurumsal_kod")
+  fonksiyonelKod          String     @map("fonksiyonel_kod")
+  finansKodu              String     @default("5") @map("finans_kodu")
+  gerceklestirmeGorevlisi String?    @map("gerceklestirme_gorevlisi")
+  harcamaYetkilisi        String?    @map("harcama_yetkilisi")
+  aktif                   Boolean    @default(true)
+  version                 Int        @default(0)
+  olusturmaZamani         DateTime   @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
+  guncellemeZamani        DateTime   @updatedAt @map("guncelleme_zamani") @db.Timestamptz(3)
+  tasinmazlar             Tasinmaz[]
+  sozlesmeler             Sozlesme[]
+
+  @@map("birim")
+}
+
+model Tasinmaz {
+  id               Int           @id @default(autoincrement())
+  tur              TasinmazTuru
+  kisaAd           String        @map("kisa_ad")
+  adres            String
+  il               String        @default("Konya")
+  ilce             String
+  mahalle          String?
+  ada              String?
+  parsel           String?
+  bagimsizBolum    String?       @map("bagimsiz_bolum")
+  tapuBilgisi      String?       @map("tapu_bilgisi")
+  m2               Decimal?      @db.Decimal(12, 2)
+  kullananBirimId  Int?          @map("kullanan_birim_id")
+  kullananBirim    Birim?        @relation(fields: [kullananBirimId], references: [id])
+  kullanimAmaci    KullanimAmaci @map("kullanim_amaci")
+  notlar           String?
+  version          Int           @default(0)
+  olusturmaZamani  DateTime      @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
+  guncellemeZamani DateTime      @updatedAt @map("guncelleme_zamani") @db.Timestamptz(3)
+  sozlesmeler      Sozlesme[]
+
+  @@index([ada, parsel])
+  @@map("tasinmaz")
+}
+
+model Kisi {
+  id               Int             @id @default(autoincrement())
+  tip              KisiTipi
+  tckn             String?         @unique
+  vkn              String?         @unique
+  ad               String?
+  soyad            String?
+  unvan            String?
+  vergiDairesi     String?         @map("vergi_dairesi")
+  vergiStatusu     VergiStatusu    @map("vergi_statusu")
+  statuTeyitli     Boolean         @default(false) @map("statu_teyitli")
+  telefon          String?
+  adres            String?
+  version          Int             @default(0)
+  olusturmaZamani  DateTime        @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
+  guncellemeZamani DateTime        @updatedAt @map("guncelleme_zamani") @db.Timestamptz(3)
+  ibanlar          Iban[]
+  malikKayitlari   SozlesmeMalik[] @relation("MalikKisi")
+  vekilKayitlari   SozlesmeMalik[] @relation("VekilKisi")
+
+  @@map("kisi")
+}
+
+model Iban {
+  id               Int             @id @default(autoincrement())
+  kisiId           Int             @map("kisi_id")
+  kisi             Kisi            @relation(fields: [kisiId], references: [id])
+  iban             String
+  bankaAdi         String?         @map("banka_adi")
+  aktif            Boolean         @default(true)
+  olusturmaZamani  DateTime        @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
+  guncellemeZamani DateTime        @updatedAt @map("guncelleme_zamani") @db.Timestamptz(3)
+  malikKayitlari   SozlesmeMalik[]
+
+  @@unique([kisiId, iban])
+  @@map("iban")
+}
+
+model Sozlesme {
+  id                     Int             @id @default(autoincrement())
+  sozlesmeNo             String          @unique @map("sozlesme_no")
+  tasinmazId             Int             @map("tasinmaz_id")
+  tasinmaz               Tasinmaz        @relation(fields: [tasinmazId], references: [id])
+  birimId                Int             @map("birim_id")
+  birim                  Birim           @relation(fields: [birimId], references: [id])
+  ekonomikKod            String          @map("ekonomik_kod")
+  imzaTarihi             DateTime?       @map("imza_tarihi") @db.Date
+  baslangic              DateTime        @db.Date
+  bitis                  DateTime?       @db.Date
+  ilkKiraBaslangici      DateTime        @map("ilk_kira_baslangici") @db.Date
+  oncekiSozlesmeId       Int?            @unique @map("onceki_sozlesme_id")
+  oncekiSozlesme         Sozlesme?       @relation("Yenileme", fields: [oncekiSozlesmeId], references: [id])
+  sonrakiSozlesme        Sozlesme?       @relation("Yenileme")
+  bedelTutari            Decimal         @map("bedel_tutari") @db.Decimal(18, 2)
+  bedelTabani            BedelTabani     @map("bedel_tabani")
+  bedelTuru              BedelTuru       @default(BRUT) @map("bedel_turu")
+  odemePeriyoduAy        Int             @map("odeme_periyodu_ay")
+  odemeZamani            OdemeZamani     @map("odeme_zamani")
+  vadeKurali             VadeKurali      @map("vade_kurali")
+  vadeParametresi        Int             @default(0) @map("vade_parametresi")
+  artisKurali            ArtisKurali     @map("artis_kurali")
+  artisDegisimTuru       DegisimTuru     @default(ON_IKI_AY_ORT) @map("artis_degisim_turu")
+  sabitArtisOrani        Decimal?        @map("sabit_artis_orani") @db.Decimal(9, 4)
+  artisPeriyoduAy        Int             @default(12) @map("artis_periyodu_ay")
+  kistYontemi            KistYontemi     @default(GERCEK_GUN) @map("kist_yontemi")
+  damgaTahsil            DamgaTahsil     @default(ISTIHKAKTAN) @map("damga_tahsil")
+  ihaleDayanagi          IhaleDayanagi   @default(DT_4734_22E) @map("ihale_dayanagi")
+  onayBelgesiNo          String?         @map("onay_belgesi_no")
+  onayBelgesiTarihi      DateTime?       @map("onay_belgesi_tarihi") @db.Date
+  piyasaArastirmaTarihi  DateTime?       @map("piyasa_arastirma_tarihi") @db.Date
+  encumenKararNo         String?         @map("encumen_karar_no")
+  gecisTarihi            DateTime?       @map("gecis_tarihi") @db.Date
+  gecisBedeli            Decimal?        @map("gecis_bedeli") @db.Decimal(18, 2)
+  odenmisSayilanSonTarih DateTime?       @map("odenmis_sayilan_son_tarih") @db.Date
+  durum                  SozlesmeDurumu  @default(TASLAK)
+  uzamaSayisi            Int             @default(0) @map("uzama_sayisi")
+  fesihTarihi            DateTime?       @map("fesih_tarihi") @db.Date
+  fesihNedeni            String?         @map("fesih_nedeni")
+  notlar                 String?
+  version                Int             @default(0)
+  olusturmaZamani        DateTime        @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
+  guncellemeZamani       DateTime        @updatedAt @map("guncelleme_zamani") @db.Timestamptz(3)
+  malikler               SozlesmeMalik[]
+  kiraDonemleri          KiraDonemi[]
+  artislar               ArtisHesabi[]
+  taksitler              Taksit[]
+
+  @@index([durum])
+  @@map("sozlesme")
+}
+
+model SozlesmeMalik {
+  id                  Int       @id @default(autoincrement())
+  sozlesmeId          Int       @map("sozlesme_id")
+  sozlesme            Sozlesme  @relation(fields: [sozlesmeId], references: [id], onDelete: Cascade)
+  kisiId              Int       @map("kisi_id")
+  kisi                Kisi      @relation("MalikKisi", fields: [kisiId], references: [id])
+  pay                 Int
+  payda               Int
+  ibanId              Int?      @map("iban_id")
+  iban                Iban?     @relation(fields: [ibanId], references: [id])
+  vekilKisiId         Int?      @map("vekil_kisi_id")
+  vekil               Kisi?     @relation("VekilKisi", fields: [vekilKisiId], references: [id])
+  gecerlilikBaslangic DateTime  @map("gecerlilik_baslangic") @db.Date
+  gecerlilikBitis     DateTime? @map("gecerlilik_bitis") @db.Date
+  olusturmaZamani     DateTime  @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
+  guncellemeZamani    DateTime  @updatedAt @map("guncelleme_zamani") @db.Timestamptz(3)
+
+  @@index([sozlesmeId])
+  @@map("sozlesme_malik")
+}
+
+model KiraDonemi {
+  id               Int               @id @default(autoincrement())
+  sozlesmeId       Int               @map("sozlesme_id")
+  sozlesme         Sozlesme          @relation(fields: [sozlesmeId], references: [id], onDelete: Cascade)
+  baslangic        DateTime          @db.Date
+  bitis            DateTime?         @db.Date
+  bedelTutari      Decimal           @map("bedel_tutari") @db.Decimal(18, 2)
+  bedelTabani      BedelTabani       @map("bedel_tabani")
+  kaynak           KiraDonemiKaynagi
+  artisHesabiId    Int?              @unique @map("artis_hesabi_id")
+  artisHesabi      ArtisHesabi?      @relation(fields: [artisHesabiId], references: [id])
+  aciklama         String?
+  olusturanId      Int?              @map("olusturan_id")
+  olusturmaZamani  DateTime          @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
+  guncellemeZamani DateTime          @updatedAt @map("guncelleme_zamani") @db.Timestamptz(3)
+
+  @@index([sozlesmeId, baslangic])
+  @@map("kira_donemi")
+}
+
+model ArtisHesabi {
+  id                Int         @id @default(autoincrement())
+  sozlesmeId        Int         @map("sozlesme_id")
+  sozlesme          Sozlesme    @relation(fields: [sozlesmeId], references: [id], onDelete: Cascade)
+  donemBaslangic    DateTime    @map("donem_baslangic") @db.Date
+  referansYil       Int         @map("referans_yil")
+  referansAy        Int         @map("referans_ay")
+  tavan             Decimal?    @db.Decimal(9, 4)
+  sozlesmeOrani     Decimal?    @map("sozlesme_orani") @db.Decimal(9, 4)
+  uygulananOran     Decimal?    @map("uygulanan_oran") @db.Decimal(9, 4)
+  eskiBedel         Decimal     @map("eski_bedel") @db.Decimal(18, 2)
+  yeniBedel         Decimal?    @map("yeni_bedel") @db.Decimal(18, 2)
+  elleOran          Decimal?    @map("elle_oran") @db.Decimal(9, 4)
+  elleOranGerekcesi String?     @map("elle_oran_gerekcesi")
+  gerekce           Json
+  durum             ArtisDurumu
+  onaylayanId       Int?        @map("onaylayan_id")
+  onayZamani        DateTime?   @map("onay_zamani") @db.Timestamptz(3)
+  version           Int         @default(0)
+  olusturmaZamani   DateTime    @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
+  guncellemeZamani  DateTime    @updatedAt @map("guncelleme_zamani") @db.Timestamptz(3)
+  kiraDonemi        KiraDonemi?
+  farkTaksitleri    Taksit[]
+
+  @@index([sozlesmeId, donemBaslangic])
+  @@map("artis_hesabi")
+}
+
+model Taksit {
+  id               Int          @id @default(autoincrement())
+  sozlesmeId       Int          @map("sozlesme_id")
+  sozlesme         Sozlesme     @relation(fields: [sozlesmeId], references: [id], onDelete: Cascade)
+  tur              TaksitTuru
+  donemBaslangic   DateTime     @map("donem_baslangic") @db.Date
+  donemBitis       DateTime     @map("donem_bitis") @db.Date
+  vadeTarihi       DateTime     @map("vade_tarihi") @db.Date
+  tutar            Decimal      @db.Decimal(18, 2)
+  hesapGoruntusu   Json         @map("hesap_goruntusu")
+  durum            TaksitDurumu @default(PLANLANDI)
+  odemeTarihi      DateTime?    @map("odeme_tarihi") @db.Date
+  anaTaksitId      Int?         @map("ana_taksit_id")
+  anaTaksit        Taksit?      @relation("FarkTaksiti", fields: [anaTaksitId], references: [id])
+  farkTaksitleri   Taksit[]     @relation("FarkTaksiti")
+  artisHesabiId    Int?         @map("artis_hesabi_id")
+  artisHesabi      ArtisHesabi? @relation(fields: [artisHesabiId], references: [id])
+  version          Int          @default(0)
+  olusturmaZamani  DateTime     @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
+  guncellemeZamani DateTime     @updatedAt @map("guncelleme_zamani") @db.Timestamptz(3)
+
+  @@index([sozlesmeId, donemBaslangic])
+  @@index([durum, vadeTarihi])
+  @@map("taksit")
+}
+
+model EndeksDegeri {
+  id               Int           @id @default(autoincrement())
+  seri             OranSerisi
+  yil              Int
+  ay               Int
+  deger            Decimal       @db.Decimal(14, 4)
+  kaynak           EndeksKaynagi
+  evdsDegeri       Decimal?      @map("evds_degeri") @db.Decimal(14, 4)
+  evdsSeriKodu     String?       @map("evds_seri_kodu")
+  hamVeri          Json?         @map("ham_veri")
+  onayDurumu       OnayDurumu    @map("onay_durumu")
+  onaylayanId      Int?          @map("onaylayan_id")
+  onayZamani       DateTime?     @map("onay_zamani") @db.Timestamptz(3)
+  olusturmaZamani  DateTime      @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
+  guncellemeZamani DateTime      @updatedAt @map("guncelleme_zamani") @db.Timestamptz(3)
+
+  @@unique([seri, yil, ay])
+  @@map("endeks_degeri")
+}
+
+model Parametre {
+  id                Int       @id @default(autoincrement())
+  anahtar           String
+  deger             String
+  yururlukBaslangic DateTime  @map("yururluk_baslangic") @db.Date
+  yururlukBitis     DateTime? @map("yururluk_bitis") @db.Date
+  mevzuatDayanagi   String?   @map("mevzuat_dayanagi")
+  aciklama          String?
+  version           Int       @default(0)
+  olusturmaZamani   DateTime  @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
+  guncellemeZamani  DateTime  @updatedAt @map("guncelleme_zamani") @db.Timestamptz(3)
+
+  @@unique([anahtar, yururlukBaslangic])
+  @@index([anahtar])
+  @@map("parametre")
+}
+
+model Tatil {
+  id       Int      @id @default(autoincrement())
+  tarih    DateTime @unique @db.Date
+  ad       String
+  yarimGun Boolean  @default(false) @map("yarim_gun")
+
+  @@map("tatil")
+}
+
+model Hatirlatma {
+  id               Int              @id @default(autoincrement())
+  anahtar          String           @unique
+  kural            String
+  iliskiliTur      String           @map("iliskili_tur")
+  iliskiliId       String           @map("iliskili_id")
+  sozlesmeId       Int?             @map("sozlesme_id")
+  baslik           String
+  aciklama         String
+  hedefTarih       DateTime         @map("hedef_tarih") @db.Date
+  gorunurTarih     DateTime         @map("gorunur_tarih") @db.Date
+  oncelik          Oncelik
+  kararGerekli     Boolean          @default(false) @map("karar_gerekli")
+  durum            HatirlatmaDurumu @default(ACIK)
+  ertelenenTarih   DateTime?        @map("ertelenen_tarih") @db.Date
+  tamamlayanId     Int?             @map("tamamlayan_id")
+  tamamlanmaZamani DateTime?        @map("tamamlanma_zamani") @db.Timestamptz(3)
+  not              String?
+  olusturmaZamani  DateTime         @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
+  guncellemeZamani DateTime         @updatedAt @map("guncelleme_zamani") @db.Timestamptz(3)
+
+  @@index([durum, hedefTarih])
+  @@index([sozlesmeId])
+  @@map("hatirlatma")
+}
+
+model Belge {
+  id              Int       @id @default(autoincrement())
+  sahipTur        String    @map("sahip_tur")
+  sahipId         Int       @map("sahip_id")
+  belgeTuru       BelgeTuru @map("belge_turu")
+  dosyaAdi        String    @map("dosya_adi")
+  sha256          String
+  boyut           Int
+  mime            String
+  yukleyenId      Int       @map("yukleyen_id")
+  olusturmaZamani DateTime  @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
+
+  @@index([sahipTur, sahipId])
+  @@map("belge")
+}
+
+model IsCalisma {
+  id        Int       @id @default(autoincrement())
+  isAdi     String    @map("is_adi")
+  baslangic DateTime  @db.Timestamptz(3)
+  bitis     DateTime? @db.Timestamptz(3)
+  durum     IsDurumu
+  ozet      String?
+  hata      String?
+
+  @@index([isAdi, baslangic])
+  @@map("is_calisma")
+}
+
+model OlayGunlugu {
+  id          Int      @id @default(autoincrement())
+  kullaniciId Int?     @map("kullanici_id")
+  zaman       DateTime @default(now()) @db.Timestamptz(3)
+  varlik      String
+  varlikId    String   @map("varlik_id")
+  eylem       String
+  once        Json?
+  sonra       Json?
+  ip          String?
+
+  @@index([varlik, varlikId])
+  @@index([zaman])
+  @@map("olay_gunlugu")
+}
