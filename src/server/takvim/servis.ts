@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { OTOMATIK_KURALLAR } from '@/core/hatirlatma'
 import { icsUret } from '@/core/ics'
-import { bugunIstanbul, gunEkle, type Tarih } from '@/core/tarih'
+import { bugunIstanbul, gunEkle, karsilastir, type Tarih } from '@/core/tarih'
 import type { IslemBaglami } from '../baglam'
 import { prisma } from '../db'
 import { denetimKaydi } from '../denetim'
@@ -16,11 +16,13 @@ import { tokenOzeti } from '../auth/oturum'
 const TOKEN_BICIMI = /^[A-Za-z0-9_-]{20,}$/
 
 /**
- * Hatırlatma motorunun (çekirdek `hatirlatmalariUret`) ürettiği kurallar: başlık ve açıklamaları çekirdekte yalnızca sözleşme no,
- * taşınmaz kısa adı, tarih ve tutardan kurulur. Diğer kuralların (UZAMA_BILGI, UZAMA_HATA, ARTIS_HESAP_HATA, H5_FAZLA_ODEME,
- * TAKVIM_HATA...) açıklaması başka servislerin yazdığı serbest iletidir; akışa girmez (KVKK, spec §9: kişi adı/TCKN/IBAN yok).
+ * Açıklaması akışa girebilen kurallar: hatırlatma motorunun (çekirdek `hatirlatmalariUret`) ürettikleri; açıklamaları çekirdekte
+ * yalnızca sözleşme no, taşınmaz kısa adı ve tarihten kurulur. H1 hariç: açıklamasında taksit tutarı var (spec §9: akışta tutar yok;
+ * tutar panoda kalır). Diğer kuralların (UZAMA_BILGI, UZAMA_HATA, ARTIS_HESAP_HATA, H5_FAZLA_ODEME, TAKVIM_HATA...) açıklaması başka
+ * servislerin yazdığı serbest iletidir (tutar/kişi adı içerebilir); akışa girmez (KVKK: kişi adı/TCKN/IBAN yok). Bu kümenin dışındaki
+ * her kural için akışa yalnızca `baslik` ile sabit açıklama gider.
  */
-const MOTOR_KURALLARI: ReadonlySet<string> = new Set<string>([...OTOMATIK_KURALLAR, 'H13'])
+const MOTOR_KURALLARI: ReadonlySet<string> = new Set<string>([...OTOMATIK_KURALLAR.filter((k) => k !== 'H1'), 'H13'])
 
 const GENEL_ACIKLAMA = 'Ayrıntı için KBB Kira Takip uygulamasında hatırlatmayı açın.'
 
@@ -55,24 +57,36 @@ export function takvimUrl(token: string): string {
  * Eşleştirme sunulan tokenın HMAC özeti üzerinden benzersiz dizinle yapılır: özet tokenın önekini sızdırmaz, dolayısıyla karakter karakter
  * (zamanlama) karşılaştırması söz konusu değildir. Token günlüğe yazılmaz.
  *
- * KVKK: akışta yalnızca sözleşme no, taşınmaz kısa adı, tarih ve tutar bulunur (bkz. `MOTOR_KURALLARI`).
+ * Ertelenmiş kayıt, erteleme gününde geri döner (pano ile aynı): etkinlik tarihi ve 7 günlük pencere `ertelenenTarih ?? hedefTarih`e göre.
+ *
+ * KVKK / spec §9: akışta yalnızca sözleşme no, taşınmaz kısa adı ve olay bulunur; tutar, kişi adı, TCKN, IBAN yok (bkz. `MOTOR_KURALLARI`).
  */
 export async function takvimIcerigi(token: string, bugun: Tarih = bugunIstanbul()): Promise<string | null> {
   if (!TOKEN_BICIMI.test(token)) return null
   // Yalnızca aktiflik okunur: sifreHash gibi alanlar belleğe yüklenmesin.
   const k = await prisma.kullanici.findUnique({ where: { icsTokenHash: tokenOzeti(token) }, select: { aktif: true } })
   if (!k?.aktif) return null
+  const esik = dbTarih(gunEkle(bugun, -GERI_GUN))
   const kayitlar = await prisma.hatirlatma.findMany({
-    where: { durum: { in: ['ACIK', 'ERTELENDI'] }, hedefTarih: { gte: dbTarih(gunEkle(bugun, -GERI_GUN)) } },
+    where: {
+      OR: [
+        { durum: 'ACIK', hedefTarih: { gte: esik } },
+        { durum: 'ERTELENDI', OR: [{ ertelenenTarih: { gte: esik } }, { ertelenenTarih: null, hedefTarih: { gte: esik } }] },
+      ],
+    },
     orderBy: [{ hedefTarih: 'asc' }, { id: 'asc' }],
     take: AZAMI_ETKINLIK,
   })
+  // Sıra etkinlik tarihine göre (ertelenmiş kayıtlar yeni tarihlerinde); eşitlikte kimlik.
+  const etkinlikler = kayitlar
+    .map((h) => ({ h, tarih: tarihDb(h.durum === 'ERTELENDI' ? (h.ertelenenTarih ?? h.hedefTarih) : h.hedefTarih) }))
+    .sort((a, b) => karsilastir(a.tarih, b.tarih) || a.h.id - b.h.id)
   return icsUret({
     takvimAdi: 'KBB Kira Takip',
     olusturma: new Date(),
-    etkinlikler: kayitlar.map((h) => ({
+    etkinlikler: etkinlikler.map(({ h, tarih }) => ({
       uid: `${h.anahtar}@kbb-kira`,
-      tarih: tarihDb(h.hedefTarih),
+      tarih,
       baslik: `[${h.oncelik}] ${h.baslik}`,
       aciklama: MOTOR_KURALLARI.has(h.kural) ? h.aciklama : GENEL_ACIKLAMA,
     })),

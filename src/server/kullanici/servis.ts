@@ -46,9 +46,12 @@ export async function kullaniciAktiflik(id: number, aktif: boolean, baglam: Isle
   await prisma.$transaction(async (tx) => {
     const k = await tx.kullanici.findUnique({ where: { id } })
     if (!k) throw new BulunamadiHatasi('Kullanıcı bulunamadı.')
-    await tx.kullanici.update({ where: { id }, data: { aktif } })
+    // Pasifleştirme takvim aboneliğini de iptal eder: yeniden aktifleştirme eski (sızmış olabilecek) adresi canlandırmaz.
+    await tx.kullanici.update({ where: { id }, data: { aktif, ...(aktif ? {} : { icsTokenHash: null }) } })
     if (!aktif) await kullaniciOturumlariniKapat(id, undefined, tx)
-    await denetimKaydi(tx, baglam, { varlik: 'kullanici', varlikId: id, eylem: aktif ? 'AKTIFLESTIR' : 'PASIFLESTIR' })
+    await denetimKaydi(tx, baglam, {
+      varlik: 'kullanici', varlikId: id, eylem: aktif ? 'AKTIFLESTIR' : 'PASIFLESTIR', sonra: { degisenAlanlar: aktif ? ['aktif'] : ['aktif', 'icsTokenHash'] },
+    })
   })
 }
 
@@ -57,8 +60,12 @@ export async function sifreSifirla(id: number, geciciSifre: string, baglam: Isle
   const ozet = await sifreHashle(geciciSifre)
   await prisma.$transaction(async (tx) => {
     if (!(await tx.kullanici.findUnique({ where: { id }, select: { id: true } }))) throw new BulunamadiHatasi('Kullanıcı bulunamadı.')
-    await tx.kullanici.update({ where: { id }, data: { sifreHash: ozet, sifreDegismeli: true, hataliGirisSayisi: 0, kilitBitis: null } })
+    // Sıfırlama (hesap ele geçirilmiş olabilir) takvim aboneliğini de iptal eder; kullanıcı yeni bağlantıyı Hesabım'dan üretir.
+    await tx.kullanici.update({ where: { id }, data: { sifreHash: ozet, sifreDegismeli: true, hataliGirisSayisi: 0, kilitBitis: null, icsTokenHash: null } })
     await kullaniciOturumlariniKapat(id, undefined, tx)
-    await denetimKaydi(tx, baglam, { varlik: 'kullanici', varlikId: id, eylem: 'SIFRE_SIFIRLA' })
+    await denetimKaydi(tx, baglam, {
+      varlik: 'kullanici', varlikId: id, eylem: 'SIFRE_SIFIRLA',
+      sonra: { degisenAlanlar: ['sifreHash', 'sifreDegismeli', 'hataliGirisSayisi', 'kilitBitis', 'icsTokenHash'] },
+    })
   })
 }

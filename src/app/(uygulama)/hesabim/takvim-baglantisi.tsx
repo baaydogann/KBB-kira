@@ -13,7 +13,7 @@ export function TakvimBaglantisi({ varMi }: { varMi: boolean }) {
   return (
     <div className="space-y-3 text-sm">
       <p>Hatırlatmaları Outlook veya Google Takvim&apos;e &quot;internetten takvim ekle&quot; ile abone olarak görebilirsiniz. Bağlantı kişiseldir; paylaşmayın.</p>
-      <p className="text-slate-600">Takvimde yalnızca sözleşme no, taşınmaz kısa adı, tarih ve tutar bulunur; kişi adı, T.C. kimlik no ve IBAN yer almaz.</p>
+      <p className="text-slate-600">Takvimde TCKN, IBAN ve kişi adı gönderilmez; yalnızca sözleşme no, taşınmaz kısa adı ve olay yer alır. Taşınmaz kısa adı gibi serbest metin alanlarına kişi adı yazmayın.</p>
       <Uyari ton="bilgi">
         Her etkinliğe bir önceki gün 09:00&apos;da çalan bir alarm eklenir. iOS ve macOS Takvim bu alarmı uygular; Google Takvim ve Outlook
         abone olunan takvimlerdeki alarmları çoğunlukla yok sayar ve kendi bildirim ayarlarını kullanır. Bu uygulamalar abonelikleri de

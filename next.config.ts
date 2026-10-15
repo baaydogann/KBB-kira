@@ -1,5 +1,6 @@
 import path from 'node:path'
 import type { NextConfig } from 'next'
+import { TAKVIM_ISTEK_GUNLUGU_HARIC } from './src/server/takvim/yol'
 
 const gelistirme = process.env.NODE_ENV === 'development'
 
@@ -28,7 +29,7 @@ const nextConfig: NextConfig = {
   outputFileTracingRoot: projeKoku,
   serverExternalPackages: ['@node-rs/argon2'],
   // Takvim aboneliği tokenı adres yolundadır (/takvim/<token>.ics); geliştirme sunucusunun istek günlüğüne yazılmasın.
-  logging: { incomingRequests: { ignore: [/^\/takvim\//] } },
+  logging: { incomingRequests: { ignore: [TAKVIM_ISTEK_GUNLUGU_HARIC] } },
   async headers() {
     return [
       {

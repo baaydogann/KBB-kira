@@ -1,15 +1,17 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import type { Prisma } from '@/generated/prisma'
 import { GET } from '@/app/takvim/[dosya]/route'
+import { OTOMATIK_KURALLAR } from '@/core/hatirlatma'
 import { prisma } from '@/server/db'
 import { tarih as t } from '@/core/tarih'
 import { tokenOzeti } from '@/server/auth/oturum'
 import { dbTarih } from '@/server/donustur'
 import { ortam } from '@/server/env'
 import { icsTokenIptal, icsTokenUret, takvimIcerigi, takvimUrl } from '@/server/takvim/servis'
+import { TAKVIM_ISTEK_GUNLUGU_HARIC } from '@/server/takvim/yol'
 import { hatirlatmalariUretVeKaydet } from '@/server/hatirlatma/servis'
 import { sozlesmeAktiflestir, sozlesmeTaslakKaydet } from '@/server/sozlesme/servis'
-import { kullaniciOlustur } from '@/server/kullanici/servis'
+import { kullaniciAktiflik, kullaniciOlustur, sifreSifirla } from '@/server/kullanici/servis'
 import { TEST_BAGLAMI, temizle } from './yardimci'
 import { girdi, hazirlik } from './sozlesme-yardimci'
 
@@ -35,6 +37,14 @@ function hatirlatmaEkle(ek: Partial<Prisma.HatirlatmaUncheckedCreateInput> = {})
 
 /** Katlanmış içerik satırlarını (CRLF + boşluk) birleştirir; uzun metin aramaları satır katlamasına takılmasın. */
 const duzles = (ics: string): string => ics.replace(/\r\n /g, '')
+
+/** Başlığı (öncelik öneki hariç) tam olarak `baslik` olan VEVENT bloğu (satır katlaması çözülmüş; "B-H1" ile "B-H13" karışmaz). */
+function etkinlik(ics: string, baslik: string): string {
+  const blok = duzles(ics).split('BEGIN:VEVENT\r\n').slice(1)
+    .find((b) => b.split('\r\n').some((satir) => satir.startsWith('SUMMARY:[') && satir.endsWith(`] ${baslik}`)))
+  if (!blok) throw new Error(`Akışta etkinlik yok: ${baslik}`)
+  return blok
+}
 
 const istek = (dosya: string) => GET(new Request(`http://localhost:3000/takvim/${dosya}`), { params: Promise.resolve({ dosya }) })
 
@@ -94,6 +104,9 @@ describe('.ics takvim', () => {
     expect(ics).toContain('SUMMARY:[NORMAL] ACIK-BUGUN')
     expect(ics).toContain('SUMMARY:[NORMAL] ERTELENDI-KAYIT')
     expect(ics).toContain('SUMMARY:[KRITIK] YEDI-GUN-ONCE')
+    // Ertelenmiş kayıt hedef tarihinde (21 Ekim) değil, geri döneceği günde (30 Ekim) görünür.
+    expect(etkinlik(ics, 'ERTELENDI-KAYIT')).toContain('DTSTART;VALUE=DATE:20261030\r\n')
+    expect(etkinlik(ics, 'ACIK-BUGUN')).toContain('DTSTART;VALUE=DATE:20261015\r\n')
     expect(ics).not.toContain('TAMAMLANDI-KAYIT')
     expect(ics).not.toContain('KAPANDI-KAYIT')
     expect(ics).not.toContain('SEKIZ-GUN-ONCE')
@@ -101,6 +114,64 @@ describe('.ics takvim', () => {
     // Sıra hedef tarihe göre artandır.
     expect(ics.indexOf('YEDI-GUN-ONCE')).toBeLessThan(ics.indexOf('ACIK-BUGUN'))
     expect(ics.indexOf('ACIK-BUGUN')).toBeLessThan(ics.indexOf('ERTELENDI-KAYIT'))
+  })
+
+  it('ertelenmiş kayıt erteleme gününde geri döner: etkinlik tarihi ve 7 günlük pencere ertelenen tarihe göre (yoksa hedefe)', async () => {
+    const kid = await yeniKullanici('erteleme')
+    const token = await icsTokenUret(kid, TEST_BAGLAMI)
+    await hatirlatmaEkle({ baslik: 'ACIK-NORMAL', hedefTarih: dbTarih(t('2026-10-20')) })
+    // Hedefi çok eski, erteleme günü yakın: erteleme gününde görünür.
+    await hatirlatmaEkle({ baslik: 'SNOOZE-GECIKMIS', durum: 'ERTELENDI', hedefTarih: dbTarih(t('2026-09-01')), ertelenenTarih: dbTarih(t('2026-10-25')) })
+    // Hedefi uzak, erteleme günü pencerenin hemen içinde (bugün - 7) ve hemen dışında (bugün - 8).
+    await hatirlatmaEkle({ baslik: 'SNOOZE-SINIR', durum: 'ERTELENDI', hedefTarih: dbTarih(t('2026-12-01')), ertelenenTarih: dbTarih(t('2026-10-08')) })
+    await hatirlatmaEkle({ baslik: 'SNOOZE-ESKI', durum: 'ERTELENDI', hedefTarih: dbTarih(t('2026-11-20')), ertelenenTarih: dbTarih(t('2026-10-07')) })
+    // Erteleme tarihi yoksa hedef tarih geçerlidir.
+    await hatirlatmaEkle({ baslik: 'SNOOZE-TARIHSIZ', durum: 'ERTELENDI', hedefTarih: dbTarih(t('2026-10-18')) })
+    await hatirlatmaEkle({ baslik: 'SNOOZE-TARIHSIZ-ESKI', durum: 'ERTELENDI', hedefTarih: dbTarih(t('2026-10-07')) })
+    const ics = (await takvimIcerigi(token, BUGUN))!
+    expect(etkinlik(ics, 'SNOOZE-GECIKMIS')).toContain('DTSTART;VALUE=DATE:20261025\r\n')
+    expect(etkinlik(ics, 'SNOOZE-SINIR')).toContain('DTSTART;VALUE=DATE:20261008\r\n')
+    expect(etkinlik(ics, 'SNOOZE-TARIHSIZ')).toContain('DTSTART;VALUE=DATE:20261018\r\n')
+    expect(duzles(ics)).not.toContain('SNOOZE-ESKI')
+    expect(duzles(ics)).not.toContain('SNOOZE-TARIHSIZ-ESKI')
+    expect(ics.match(/BEGIN:VEVENT/g)).toHaveLength(4)
+    // Sıra etkinlik tarihine göredir.
+    const sira = ['SNOOZE-SINIR', 'SNOOZE-TARIHSIZ', 'ACIK-NORMAL', 'SNOOZE-GECIKMIS'].map((b) => duzles(ics).indexOf(b))
+    expect(sira).toEqual([...sira].sort((a, b) => a - b))
+    expect(new Set(sira).size).toBe(4)
+  })
+
+  it('H1 (taksit) tutarı akışa girmez; başlık ve sabit açıklama gider (spec §9: tutar panoda kalır)', async () => {
+    const bugun = t('2026-10-28')
+    const h = await hazirlik()
+    const id = await sozlesmeTaslakKaydet(girdi(h), TEST_BAGLAMI)
+    await sozlesmeAktiflestir(id, 0, TEST_BAGLAMI, t('2026-01-01'))
+    await prisma.$transaction((tx) => hatirlatmalariUretVeKaydet(tx, bugun))
+    const h1 = await prisma.hatirlatma.findMany({ where: { kural: 'H1', hedefTarih: { gte: dbTarih(bugun) } } })
+    // Önkoşul: motorun H1 açıklamasında gerçekten tutar var; yoksa aşağıdaki denetimler anlamsız olurdu.
+    expect(h1.length).toBeGreaterThan(0)
+    for (const k of h1) expect(k.aciklama).toContain('₺')
+    const token = await icsTokenUret(await yeniKullanici('h1.tutar'), TEST_BAGLAMI)
+    const ics = (await takvimIcerigi(token, bugun))!
+    for (const k of h1) expect(etkinlik(ics, k.baslik)).toContain('DESCRIPTION:Ayrıntı için KBB Kira Takip uygulamasında hatırlatmayı açın.\r\n')
+    expect(ics).not.toContain('₺')
+    expect(ics).not.toMatch(/\bTL\b/)
+    expect(ics).not.toMatch(/\d[.\d]*\\?,\d{2}/)
+  })
+
+  it('H1 hariç her motor kuralı (OTOMATIK_KURALLAR + H13) kendi açıklamasını korur; H1 sabit açıklama alır', async () => {
+    const kid = await yeniKullanici('motor.kurallari')
+    const token = await icsTokenUret(kid, TEST_BAGLAMI)
+    // Listeden türetilir: motora eklenecek yeni bir kural açıklamasını sessizce kaybederse (genel metne düşerse) bu test düşer.
+    const motor = [...OTOMATIK_KURALLAR.filter((k) => k !== 'H1'), 'H13']
+    expect(motor).toContain('H6_SON_GUN')
+    for (const kural of motor) await hatirlatmaEkle({ kural, baslik: `B-${kural}`, aciklama: `Motor-aciklama-${kural}` })
+    await hatirlatmaEkle({ kural: 'H1', baslik: 'B-H1', aciklama: 'Dukkan: 10.000,00 ₺, vade 20.10.2026.' })
+    const ics = (await takvimIcerigi(token, BUGUN))!
+    for (const kural of motor) expect(etkinlik(ics, `B-${kural}`)).toContain(`DESCRIPTION:Motor-aciklama-${kural}\r\n`)
+    expect(etkinlik(ics, 'B-H1')).toContain('DESCRIPTION:Ayrıntı için KBB Kira Takip uygulamasında hatırlatmayı açın.\r\n')
+    expect(ics).not.toContain('10.000')
+    expect(ics).not.toContain('₺')
   })
 
   it('KVKK: motor dışı kuralların serbest metni akışa girmez; yalnızca başlık ve sabit açıklama gider', async () => {
@@ -150,6 +221,41 @@ describe('.ics takvim', () => {
   })
 })
 
+describe('hesap yaşam döngüsü takvim bağlantısını iptal eder', () => {
+  it('pasifleştirme bağlantıyı siler; yeniden aktifleştirme eski adresi canlandırmaz; aktifleştirme başka bağlantıyı silmez', async () => {
+    const kid = await yeniKullanici('pasif.dongu')
+    const diger = await yeniKullanici('aktif.kalan')
+    const token = await icsTokenUret(kid, TEST_BAGLAMI)
+    const digerToken = await icsTokenUret(diger, TEST_BAGLAMI)
+    await kullaniciAktiflik(kid, false, TEST_BAGLAMI)
+    expect(await takvimIcerigi(token, BUGUN)).toBeNull()
+    expect((await prisma.kullanici.findUniqueOrThrow({ where: { id: kid } })).icsTokenHash).toBeNull()
+    await kullaniciAktiflik(kid, true, TEST_BAGLAMI)
+    expect(await takvimIcerigi(token, BUGUN)).toBeNull()
+    // Etkin bir kullanıcıyı "aktifleştirmek" bağlantısını silmez.
+    await kullaniciAktiflik(diger, true, TEST_BAGLAMI)
+    expect(await takvimIcerigi(digerToken, BUGUN)).not.toBeNull()
+    // Yeniden etkinleşen kullanıcı yeni bağlantı üretebilir.
+    expect(await takvimIcerigi(await icsTokenUret(kid, TEST_BAGLAMI), BUGUN)).not.toBeNull()
+    const satir = await prisma.olayGunlugu.findFirstOrThrow({ where: { varlik: 'kullanici', varlikId: String(kid), eylem: 'PASIFLESTIR' } })
+    expect(satir.sonra).toEqual({ degisenAlanlar: ['aktif', 'icsTokenHash'] })
+  })
+
+  it('şifre sıfırlama bağlantıyı siler; kullanıcı yenisini üretebilir; başkasınınki etkilenmez', async () => {
+    const kid = await yeniKullanici('sifirlanan')
+    const diger = await yeniKullanici('sifirlanmayan')
+    const token = await icsTokenUret(kid, TEST_BAGLAMI)
+    const digerToken = await icsTokenUret(diger, TEST_BAGLAMI)
+    await sifreSifirla(kid, 'yeni-gecici-sifre-123', TEST_BAGLAMI)
+    expect(await takvimIcerigi(token, BUGUN)).toBeNull()
+    expect((await prisma.kullanici.findUniqueOrThrow({ where: { id: kid } })).icsTokenHash).toBeNull()
+    expect(await takvimIcerigi(digerToken, BUGUN)).not.toBeNull()
+    expect(await takvimIcerigi(await icsTokenUret(kid, TEST_BAGLAMI), BUGUN)).not.toBeNull()
+    const satir = await prisma.olayGunlugu.findFirstOrThrow({ where: { varlik: 'kullanici', varlikId: String(kid), eylem: 'SIFRE_SIFIRLA' } })
+    expect(JSON.stringify(satir.sonra)).toContain('icsTokenHash')
+  })
+})
+
 describe('/takvim/<token>.ics uç noktası', () => {
   it('takvimUrl adresi uç noktayla uyumludur; yanıt takvim türünde ve önbelleğe alınamaz', async () => {
     const kid = await yeniKullanici('uc.nokta')
@@ -158,6 +264,7 @@ describe('/takvim/<token>.ics uç noktası', () => {
     const url = new URL(takvimUrl(token))
     expect(url.origin).toBe(new URL(ortam().APP_URL).origin)
     expect(url.pathname).toBe(`/takvim/${token}.ics`)
+    expect(TAKVIM_ISTEK_GUNLUGU_HARIC.test(url.pathname)).toBe(true)
     const yanit = await istek(url.pathname.split('/').pop()!)
     expect(yanit.status).toBe(200)
     expect(yanit.headers.get('Content-Type')).toBe('text/calendar; charset=utf-8')
