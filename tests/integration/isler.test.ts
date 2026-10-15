@@ -29,6 +29,7 @@ vi.mock('@/server/taksit/servis', async (orijinal) => {
   }
 })
 
+import { PrismaClient } from '@/generated/prisma'
 import { prisma } from '@/server/db'
 import { para } from '@/core/para'
 import { ayKaydir, tarih as t } from '@/core/tarih'
@@ -181,6 +182,28 @@ describe('kilit sorgusu (isKilidiTutuluyorMu)', () => {
         await tutan
       }
       expect(await isKilidiTutuluyorMu(prisma, ad)).toBe(false)
+    }
+  })
+
+  it('küme geneli pg_locks yalnızca geçerli veritabanıyla sınırlanır: sunucudaki başka veritabanında tutulan aynı anahtarlı kilit görünmez', async () => {
+    // Aynı sunucudaki varsayılan `postgres` veritabanına ikinci bir istemci: yalnızca bir danışma kilidi alınır, tabloya dokunulmaz.
+    const url = new URL(process.env.DATABASE_URL!)
+    url.pathname = '/postgres'
+    const diger = new PrismaClient({ datasources: { db: { url: url.toString() } } })
+    try {
+      await diger.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('takvim-guncelle'))`
+        // Süzgeçsiz görünüm başka veritabanındaki kilidi de listeler...
+        const [ham] = await prisma.$queryRaw<{ n: bigint }[]>`
+          SELECT count(*) AS n FROM pg_locks
+          WHERE locktype = 'advisory' AND granted AND ((classid::bigint << 32) | objid::bigint) = hashtext('takvim-guncelle')::bigint`
+        expect(ham?.n).toBe(1n)
+        // ...ama sorgu geçerli veritabanıyla sınırlıdır ve danışma kilitleri veritabanı başınadır: iş burada yine kilit alabilir.
+        expect(await isKilidiTutuluyorMu(prisma, 'takvim-guncelle')).toBe(false)
+        expect(await tekKopya('takvim-guncelle', async () => 1)).toEqual({ calisti: true, sonuc: 1 })
+      }, { timeout: 60_000 })
+    } finally {
+      await diger.$disconnect()
     }
   })
 

@@ -23,12 +23,16 @@ export async function isKilidiniDene(tx: Tx, isAdi: string): Promise<boolean> {
  * bu yüzden zamanlayıcının aynı saniyedeki kendi tetiklemesiyle yarışıp onu ATLANDI yapamaz (`isKilidiniDene` yapardı).
  * `pg_try_advisory_xact_lock(bigint)` anahtarı `pg_locks`ta `classid` (üst 32 bit) ve `objid` (alt 32 bit) olarak, `objsubid = 1` ile görünür;
  * `hashtext` negatif olabilir, işaretli 64 bit birleştirme anahtarı aynen geri verir.
+ * `pg_locks` küme geneldedir (aynı sunucudaki tüm veritabanları): `database` süzgeci olmadan başka bir veritabanında (ör. geliştirme ve test
+ * veritabanları ya da paylaşılan üretim sunucusu) çalışan aynı adlı iş burada "çalışıyor" görünürdü. Danışma kilitleri veritabanı başınadır:
+ * `pg_try_advisory_xact_lock` da yalnızca geçerli veritabanındaki kilitle çakışır.
  */
 export async function isKilidiTutuluyorMu(db: Tx, isAdi: string): Promise<boolean> {
   const [r] = await db.$queryRaw<{ tutuluyor: boolean }[]>`
     SELECT EXISTS (
       SELECT 1 FROM pg_locks
       WHERE locktype = 'advisory' AND objsubid = 1 AND granted
+        AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
         AND ((classid::bigint << 32) | objid::bigint) = hashtext(${isAdi})::bigint
     ) AS tutuluyor`
   return r?.tutuluyor === true
