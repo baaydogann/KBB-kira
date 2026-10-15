@@ -7,6 +7,8 @@ const sahte = vi.hoisted(() => ({
   cakisan: null as number | null,
   /** Plan güncellemesi gerçek çalışır, ardından bu sözleşme için beklenmeyen (iş kuralı dışı) hata atılır. */
   patlayan: null as number | null,
+  /** true ise her sözleşme için (plan güncellemesi gerçek çalıştıktan sonra) beklenmeyen hata atılır: sistemik arıza. */
+  hepsi: false,
   hata: new RangeError('beklenmeyen hata') as Error,
 }))
 vi.mock('@/server/env', async (orijinal) => {
@@ -21,7 +23,7 @@ vi.mock('@/server/taksit/servis', async (orijinal) => {
     taksitPlaniniGuncelle: async (...a: Parameters<typeof m.taksitPlaniniGuncelle>) => {
       const ozet = await m.taksitPlaniniGuncelle(...a)
       if (a[1] === sahte.cakisan) throw new CakismaHatasi()
-      if (a[1] === sahte.patlayan) throw sahte.hata
+      if (sahte.hepsi || a[1] === sahte.patlayan) throw sahte.hata
       return ozet
     },
   }
@@ -33,7 +35,9 @@ import { ayKaydir, tarih as t } from '@/core/tarih'
 import { endeksElleGir, endeksVerisiniGetir, endeksYaz } from '@/server/endeks/servis'
 import { gozetimTuru } from '@/server/isler/gozetim'
 import { tekKopya, BASKA_CALISMA_MESAJI } from '@/server/isler/tek-kopya'
-import { isCalistir, saglikDurumu, takiliCalismalariSupur, yurutulenCalismalariTerket, type IsSonucu } from '@/server/isler/kayit'
+import {
+  isCalistir, saglikDurumu, takiliCalismalariSupur, TAKILI_CALISMA_MESAJI, TERK_EDILEN_CALISMA_MESAJI, yurutulenCalismalariTerket, type IsSonucu,
+} from '@/server/isler/kayit'
 import { ISLER } from '@/server/isler'
 import { sozlesmeAktiflestir, sozlesmeTaslakKaydet } from '@/server/sozlesme/servis'
 import { TEST_BAGLAMI, temizle } from './yardimci'
@@ -52,6 +56,7 @@ afterEach(() => {
   sahte.anahtar = ''
   sahte.cakisan = null
   sahte.patlayan = null
+  sahte.hepsi = false
   sahte.hata = new RangeError('beklenmeyen hata')
 })
 afterAll(() => prisma.$disconnect())
@@ -158,15 +163,15 @@ describe('iş kaydı', () => {
     expect(await saglikDurumu(yirmiYediSaatSonra)).toHaveLength(2)
   })
 
-  it('günlük işin son çalışması HATALI ise 26 saat dolmadan hemen uyarır; sonraki başarılı çalışma uyarıyı kaldırır', async () => {
+  it('günlük işin son çalışması HATALI ise 26 saat dolmadan hemen uyarır; bantta ham hata metni yoktur; sonraki başarılı çalışma uyarıyı kaldırır', async () => {
     await isCalistir('takvim-guncelle', async () => ({ ozet: 'ok' }))
     await isCalistir('hatirlatma-uret', async () => ({ ozet: 'ok' }))
     expect(await saglikDurumu()).toEqual([])
-    await isCalistir('hatirlatma-uret', async () => { throw new Error('veritabanı koptu') })
+    await isCalistir('hatirlatma-uret', async () => { throw new Error('Invalid prisma.hatirlatma.findMany() invocation in C:/app/src/server/x.ts:12') })
     const uyarilar = await saglikDurumu()
-    expect(uyarilar).toHaveLength(1)
-    expect(uyarilar[0]).toContain('Hatırlatma üretimi')
-    expect(uyarilar[0]).toContain('son çalışmada hata verdi: veritabanı koptu')
+    expect(uyarilar).toEqual(['Hatırlatma üretimi (hatirlatma-uret) son çalışmada hata verdi; ayrıntı İşler ekranında.'])
+    // Ham metin yalnızca İşler ekranının okuduğu kayıtta durur.
+    expect((await prisma.isCalisma.findFirstOrThrow({ where: { durum: 'HATALI' } })).hata).toContain('C:/app/src/server/x.ts')
     await isCalistir('hatirlatma-uret', async () => ({ ozet: 'ok' }))
     expect(await saglikDurumu()).toEqual([])
   })
@@ -179,8 +184,9 @@ describe('iş kaydı', () => {
     await isCalistir('endeks-cek', async () => ({ ozet: BASKA_CALISMA_MESAJI, atlandi: true }))
     const uyarilar = await saglikDurumu(simdi)
     expect(uyarilar).toHaveLength(1)
-    expect(uyarilar[0]).toContain('EVDS')
-    expect(uyarilar[0]).toContain('EVDS 500 döndü')
+    expect(uyarilar[0]).toContain("EVDS'e ulaşılamadı")
+    expect(uyarilar[0]).toContain('ayrıntı İşler ekranında')
+    expect(uyarilar[0]).not.toContain('500')
     await isCalistir('endeks-cek', async () => ({ ozet: 'oluşturulan: 8' }))
     expect(await saglikDurumu(simdi)).toEqual([])
   })
@@ -198,21 +204,23 @@ describe('iş kaydı', () => {
     expect(await saglikDurumu(gece(21, 30))).toEqual([])
   })
 
-  it('EVDS\'te yayımlanmamış (atlanan) endeksler ve takvim işinin sözleşme hataları uyarı olarak görünür', async () => {
+  it("EVDS'te yayımlanmamış (atlanan) endeksler ve takvim işinin sözleşme hataları uyarı olarak görünür; ayrıntı metni bantta yoktur", async () => {
     await isCalistir('takvim-guncelle', async () => ({ ozet: 'ok', ayrinti: 'S-1: kira bedeli tanımlı değil' }))
     await isCalistir('hatirlatma-uret', async () => ({ ozet: 'ok' }))
     await isCalistir('endeks-cek', async () => ({ ozet: 'oluşturulan: 4, atlanan: 4', ayrinti: 'TUFE_YILLIK 2026-09: eksik veri' }))
     const uyarilar = await saglikDurumu(gecenAyinGunu(5))
-    expect(uyarilar).toHaveLength(2)
-    expect(uyarilar.join('\n')).toContain('S-1: kira bedeli tanımlı değil')
-    expect(uyarilar.join('\n')).toContain('TUFE_YILLIK 2026-09: eksik veri')
+    expect(uyarilar).toEqual([
+      'Taksit planı ve artış hesabı tamamlandı ancak bazı sözleşmeler işlenemedi; ayrıntı İşler ekranında.',
+      "EVDS'ten bazı endeksler alınamadı (yayımlanmamış olabilir); ayrıntı İşler ekranında. Endeksler ekranından elle girebilirsiniz.",
+    ])
   })
 
-  it('uzun ayrıntı bantta kısaltılır', async () => {
+  it('uzun ayrıntı ve ham hata metni bantta görünmez', async () => {
     await isCalistir('takvim-guncelle', async () => ({ ozet: 'ok', ayrinti: 'x'.repeat(3000) }))
     await isCalistir('hatirlatma-uret', async () => ({ ozet: 'ok' }))
     const [u] = await saglikDurumu()
-    expect(u!.length).toBeLessThan(500)
+    expect(u).not.toContain('xxx')
+    expect(u!.length).toBeLessThan(200)
   })
 })
 
@@ -230,7 +238,7 @@ describe('takılı çalışmalar', () => {
     expect(await takiliCalismalariSupur(simdi)).toBe(1)
     const r = await prisma.isCalisma.findMany({ orderBy: { id: 'asc' } })
     expect(r.map((x) => [x.isAdi, x.durum, x.hata, x.bitis !== null])).toEqual([
-      ['takvim-guncelle', 'HATALI', 'Süreç beklenmedik biçimde durdu (başlangıçta temizlendi).', true],
+      ['takvim-guncelle', 'HATALI', TAKILI_CALISMA_MESAJI, true],
       ['endeks-cek', 'CALISIYOR', null, false],
       ['hatirlatma-uret', 'BASARILI', null, true],
     ])
@@ -243,7 +251,7 @@ describe('takılı çalışmalar', () => {
     // Kayıt açılıp süreç içi izleyiciye girene dek bekle (ilk başarılı terk 1 satır işaretler).
     await vi.waitFor(async () => { expect(await yurutulenCalismalariTerket()).toBe(1) })
     const kayit = await prisma.isCalisma.findFirstOrThrow()
-    expect([kayit.durum, kayit.hata, kayit.bitis !== null]).toEqual(['HATALI', 'Kapanış bekleme süresi doldu; çalışma yarıda bırakıldı (işlem geri alındı).', true])
+    expect([kayit.durum, kayit.hata, kayit.bitis !== null]).toEqual(['HATALI', TERK_EDILEN_CALISMA_MESAJI, true])
     expect(await yurutulenCalismalariTerket()).toBe(0)
     birak({ ozet: 'ok' })
     await calisma
@@ -254,8 +262,8 @@ describe('takılı çalışmalar', () => {
 describe('gözetim turu', () => {
   // 2026-10-16 12:12 İstanbul: takvim 05:30'da, hatırlatma 06:00'da zamanlandı; endeks penceresinin son çalışması 10 Ekim 17:15'te.
   const simdi = new Date('2026-10-16T09:12:00Z')
-  const kayit = (isAdi: string, baslangic: string, durum: 'BASARILI' | 'HATALI' | 'CALISIYOR' | 'ATLANDI' = 'BASARILI') =>
-    prisma.isCalisma.create({ data: { isAdi, baslangic: new Date(baslangic), durum, ozet: 'x' } })
+  const kayit = (isAdi: string, baslangic: string, durum: 'BASARILI' | 'HATALI' | 'CALISIYOR' | 'ATLANDI' = 'BASARILI', hata?: string) =>
+    prisma.isCalisma.create({ data: { isAdi, baslangic: new Date(baslangic), durum, ozet: 'x', hata } })
 
   function calistirici() {
     const cagrilar: string[] = []
@@ -265,9 +273,9 @@ describe('gözetim turu', () => {
   it('hiç çalışma yoksa üç işi takvim → endeks → hatırlatma sırasıyla çalıştırır (endeks anahtarla)', async () => {
     sahte.anahtar = 'k'
     const c = calistirici()
-    const sonuc = await gozetimTuru(c.calistir, simdi)
+    const { sonuclar } = await gozetimTuru(c.calistir, { simdi })
     expect(c.cagrilar).toEqual(['takvim-guncelle', 'endeks-cek', 'hatirlatma-uret'])
-    expect(sonuc.map((s) => s.karar)).toEqual(['calistirildi', 'calistirildi', 'calistirildi'])
+    expect(sonuclar.map((s) => s.karar)).toEqual(['calistirildi', 'calistirildi', 'calistirildi'])
   })
 
   it('zamanlanmış andan sonra başarılı çalışması olan iş çalıştırılmaz; eskisi çalıştırılır', async () => {
@@ -276,47 +284,104 @@ describe('gözetim turu', () => {
     await kayit('hatirlatma-uret', '2026-10-15T03:00:00Z')
     await kayit('endeks-cek', '2026-10-10T14:16:00Z')
     const c = calistirici()
-    const sonuc = await gozetimTuru(c.calistir, simdi)
+    const { sonuclar } = await gozetimTuru(c.calistir, { simdi })
     expect(c.cagrilar).toEqual(['hatirlatma-uret'])
-    expect(sonuc.map((s) => [s.ad, s.karar])).toEqual([['takvim-guncelle', 'guncel'], ['endeks-cek', 'guncel'], ['hatirlatma-uret', 'calistirildi']])
+    expect(sonuclar.map((s) => [s.ad, s.karar])).toEqual([['takvim-guncelle', 'guncel'], ['endeks-cek', 'guncel'], ['hatirlatma-uret', 'calistirildi']])
   })
 
-  it('HATALI ve ATLANDI çalışmalar başarı sayılmaz', async () => {
+  it('HATALI ve ATLANDI çalışmalar başarı sayılmaz (HATALI 2 saatten eskiyse yeniden denenir)', async () => {
     sahte.anahtar = 'k'
-    await kayit('takvim-guncelle', '2026-10-16T02:31:00Z', 'HATALI')
+    await kayit('takvim-guncelle', '2026-10-16T02:31:00Z', 'HATALI', 'x')
     await kayit('hatirlatma-uret', '2026-10-16T03:01:00Z', 'ATLANDI')
     await kayit('endeks-cek', '2026-10-10T14:16:00Z')
     const c = calistirici()
-    await gozetimTuru(c.calistir, simdi)
+    await gozetimTuru(c.calistir, { simdi })
     expect(c.cagrilar).toEqual(['takvim-guncelle', 'hatirlatma-uret'])
+  })
+
+  it('son çalışması 2 saatten kısa süre önce HATALI başlamış iş geri çekilir; 2 saat dolunca yeniden denenir', async () => {
+    sahte.anahtar = 'k'
+    await kayit('takvim-guncelle', '2026-10-16T08:42:00Z', 'HATALI', 'EVDS 500 döndü') // 30 dk önce
+    await kayit('endeks-cek', '2026-10-16T07:13:00Z', 'HATALI', 'EVDS 500 döndü') // 1 sa 59 dk önce
+    await kayit('hatirlatma-uret', '2026-10-16T07:12:00Z', 'HATALI', 'EVDS 500 döndü') // tam 2 sa önce
+    const c = calistirici()
+    const { sonuclar } = await gozetimTuru(c.calistir, { simdi })
+    expect(sonuclar.map((s) => [s.ad, s.karar])).toEqual([['takvim-guncelle', 'geri-cekil'], ['endeks-cek', 'geri-cekil'], ['hatirlatma-uret', 'calistirildi']])
+    expect(c.cagrilar).toEqual(['hatirlatma-uret'])
+  })
+
+  it('geri çekilme yalnızca son çalışmaya bakar: HATALI sonrası başarı işi günceller', async () => {
+    await kayit('takvim-guncelle', '2026-10-16T08:00:00Z', 'HATALI', 'x')
+    await kayit('takvim-guncelle', '2026-10-16T08:30:00Z', 'BASARILI')
+    const c = calistirici()
+    const { sonuclar } = await gozetimTuru(c.calistir, { simdi })
+    expect(sonuclar.find((s) => s.ad === 'takvim-guncelle')?.karar).toBe('guncel')
+  })
+
+  it('süreç ölümüyle HATALI işaretlenen kayıtlar geri çekilmeye yol açmaz (yeniden başlatma işin hatası değildir)', async () => {
+    await kayit('takvim-guncelle', '2026-10-16T08:50:00Z', 'HATALI', TAKILI_CALISMA_MESAJI)
+    await kayit('hatirlatma-uret', '2026-10-16T08:55:00Z', 'HATALI', TERK_EDILEN_CALISMA_MESAJI)
+    const c = calistirici()
+    await gozetimTuru(c.calistir, { simdi })
+    expect(c.cagrilar).toEqual(['takvim-guncelle', 'hatirlatma-uret'])
+    // İşin kendi hatası ise, süreç ölümü kayıtlarının arkasında da görünür.
+    await kayit('takvim-guncelle', '2026-10-16T08:40:00Z', 'HATALI', 'EVDS 500 döndü')
+    const d = calistirici()
+    const { sonuclar } = await gozetimTuru(d.calistir, { simdi })
+    expect(sonuclar.find((s) => s.ad === 'takvim-guncelle')?.karar).toBe('geri-cekil')
   })
 
   it('EVDS anahtarı yoksa endeks işi sessizce atlanır', async () => {
     const c = calistirici()
-    const sonuc = await gozetimTuru(c.calistir, simdi)
+    const { sonuclar } = await gozetimTuru(c.calistir, { simdi })
     expect(c.cagrilar).toEqual(['takvim-guncelle', 'hatirlatma-uret'])
-    expect(sonuc.find((s) => s.ad === 'endeks-cek')?.karar).toBe('anahtar-yok')
+    expect(sonuclar.find((s) => s.ad === 'endeks-cek')?.karar).toBe('anahtar-yok')
   })
 
-  it('zamanlayıcının kendi tetiklemesine tolerans tanınır; taze CALISIYOR kaydı olan iş çalıştırılmaz, takılı olan engellemez', async () => {
+  it('zamanlayıcının kendi tetiklemesine tolerans tanınır; açılış turu (tolerans 0) kaçan işi hemen yakalar', async () => {
+    const yakin = new Date('2026-10-16T02:32:00Z') // takvim 02:30Z'de zamanlandı
     const c = calistirici()
-    const sonuc = await gozetimTuru(c.calistir, new Date('2026-10-16T02:32:00Z'))
-    expect(sonuc.find((s) => s.ad === 'takvim-guncelle')?.karar).toBe('bekle')
+    const { sonuclar } = await gozetimTuru(c.calistir, { simdi: yakin })
+    expect(sonuclar.find((s) => s.ad === 'takvim-guncelle')?.karar).toBe('bekle')
     expect(c.cagrilar).not.toContain('takvim-guncelle')
 
+    const acilis = calistirici()
+    const ikinci = await gozetimTuru(acilis.calistir, { simdi: yakin, toleransMs: 0 })
+    expect(ikinci.sonuclar.find((s) => s.ad === 'takvim-guncelle')?.karar).toBe('calistirildi')
+    expect(acilis.cagrilar).toContain('takvim-guncelle')
+  })
+
+  it('taze CALISIYOR kaydı olan iş çalıştırılmaz; takılı olan her turda süpürülür ve engellemez', async () => {
     await kayit('takvim-guncelle', '2026-10-16T09:10:00Z', 'CALISIYOR')
     await kayit('hatirlatma-uret', '2026-10-16T08:00:00Z', 'CALISIYOR')
     const d = calistirici()
-    const ikinci = await gozetimTuru(d.calistir, simdi)
-    expect(ikinci.map((s) => [s.ad, s.karar])).toEqual([['takvim-guncelle', 'calisiyor'], ['endeks-cek', 'anahtar-yok'], ['hatirlatma-uret', 'calistirildi']])
+    const { supurulen, sonuclar } = await gozetimTuru(d.calistir, { simdi })
+    expect(supurulen).toBe(1)
+    expect(sonuclar.map((s) => [s.ad, s.karar])).toEqual([['takvim-guncelle', 'calisiyor'], ['endeks-cek', 'anahtar-yok'], ['hatirlatma-uret', 'calistirildi']])
+    const takili = await prisma.isCalisma.findFirstOrThrow({ where: { isAdi: 'hatirlatma-uret' } })
+    expect([takili.durum, takili.hata]).toEqual(['HATALI', TAKILI_CALISMA_MESAJI])
+    expect((await gozetimTuru(d.calistir, { simdi })).supurulen).toBe(0)
   })
 
   it('bir işin hatası diğerlerini engellemez', async () => {
     sahte.anahtar = 'k'
     const cagrilar: string[] = []
-    const sonuc = await gozetimTuru(async (ad) => { cagrilar.push(ad); if (ad === 'endeks-cek') throw new Error('veritabanı koptu') }, simdi)
+    const { sonuclar } = await gozetimTuru(async (ad) => { cagrilar.push(ad); if (ad === 'endeks-cek') throw new Error('veritabanı koptu') }, { simdi })
     expect(cagrilar).toEqual(['takvim-guncelle', 'endeks-cek', 'hatirlatma-uret'])
-    expect(sonuc.map((s) => s.karar)).toEqual(['calistirildi', 'hata', 'calistirildi'])
+    expect(sonuclar.map((s) => s.karar)).toEqual(['calistirildi', 'hata', 'calistirildi'])
+  })
+
+  it('kapanış istenince kalan işler başlatılmaz (her işten önce denetlenir)', async () => {
+    sahte.anahtar = 'k'
+    let kapaniyor = false
+    const cagrilar: string[] = []
+    const { sonuclar } = await gozetimTuru(async (ad) => { cagrilar.push(ad); kapaniyor = true }, { simdi, durdu: () => kapaniyor })
+    expect(cagrilar).toEqual(['takvim-guncelle'])
+    expect(sonuclar.map((s) => [s.ad, s.karar])).toEqual([['takvim-guncelle', 'calistirildi']])
+
+    const baslangictaDurmus = calistirici()
+    expect((await gozetimTuru(baslangictaDurmus.calistir, { simdi, durdu: () => true })).sonuclar).toEqual([])
+    expect(baslangictaDurmus.cagrilar).toEqual([])
   })
 })
 
@@ -492,6 +557,33 @@ describe('işler', () => {
     expect((await prisma.sozlesme.findUniqueOrThrow({ where: { id: patlayan } })).durum).toBe('UZADI')
   })
 
+  it('takvim işi: denenen her sözleşme beklenmeyen hatayla düşerse çalışma HATALI biter, sayılar özette kalır', async () => {
+    const a = await aktif({ baslangic: '2026-01-01', bitis: null })
+    const b = await aktif({ baslangic: '2026-01-01', bitis: null })
+    const [aOnce, bOnce] = [await taksitSayisi(a), await taksitSayisi(b)]
+    sahte.hepsi = true
+
+    expect(await isCalistir('takvim-guncelle', () => ISLER['takvim-guncelle'](t('2026-10-15')))).toBe('HATALI')
+    const kayit = await prisma.isCalisma.findFirstOrThrow({ where: { isAdi: 'takvim-guncelle' } })
+    expect(kayit.durum).toBe('HATALI')
+    expect(kayit.ozet).toContain('uzatılan: 0, sözleşme: 2, eklenen: 0, güncellenen: 0, iptal: 0, artış hesaplanan: 0, endeks bekleyen: 0, hata: 2')
+    expect(kayit.hata).toContain('beklenmeyen hata')
+    // Her sözleşme geri alındı ve her biri için kalıcı hatırlatma yazıldı.
+    expect([await taksitSayisi(a), await taksitSayisi(b)]).toEqual([aOnce, bOnce])
+    expect(await prisma.hatirlatma.count({ where: { kural: 'TAKVIM_HATA' } })).toBe(2)
+    expect(await saglikDurumu()).toContain('Taksit planı ve artış hesabı (takvim-guncelle) son çalışmada hata verdi; ayrıntı İşler ekranında.')
+  })
+
+  it('takvim işi: iş kuralı hataları ve boş sözleşme listesi çalışmayı HATALI yapmaz', async () => {
+    expect((await ISLER['takvim-guncelle'](t('2026-10-15'))).hatali).toBeUndefined()
+    const bozuk = await aktif({ baslangic: '2026-01-01', bitis: null })
+    await prisma.kiraDonemi.deleteMany({ where: { sozlesmeId: bozuk } })
+    // Tek sözleşme var ve planı iş kuralı hatası veriyor (işlemi tamamlanır): sistemik arıza değil.
+    const r = await ISLER['takvim-guncelle'](t('2026-10-15'))
+    expect(r.ozet).toContain('hata: 1')
+    expect(r.hatali).toBeUndefined()
+  })
+
   it('takvim işi başka kopya çalışırken atlanır ve nedenini yazar', async () => {
     const [a, b] = await Promise.all([
       tekKopya('takvim-guncelle', async () => { await bekle(400); return 1 }),
@@ -595,7 +687,8 @@ describe('işler', () => {
     expect(kayit.hata).toContain('2026-09')
     const uyarilar = await saglikDurumu(gecenAyinGunu(5))
     expect(uyarilar).toHaveLength(1)
-    expect(uyarilar[0]).toContain('2026-09')
+    expect(uyarilar[0]).toContain("EVDS'ten bazı endeksler alınamadı")
+    expect(uyarilar[0]).not.toContain('2026-09')
   })
 
   it('endeks işi: EVDS hatası HATALI kaydı ve pano uyarısı üretir; anahtar hiçbir yere yazılmaz', async () => {
@@ -616,7 +709,8 @@ describe('işler', () => {
     expect(kayitlar[1]!.hata).toContain('EVDS 500 döndü')
     const uyarilar = await saglikDurumu(gecenAyinGunu(5))
     expect(uyarilar).toHaveLength(1)
-    expect(uyarilar[0]).toContain('EVDS 500 döndü')
+    expect(uyarilar[0]).toContain("EVDS'e ulaşılamadı")
+    expect(uyarilar[0]).not.toContain('500')
 
     const tumu = JSON.stringify([kayitlar, uyarilar, konsol.mock.calls])
     expect(tumu).not.toContain(anahtar)

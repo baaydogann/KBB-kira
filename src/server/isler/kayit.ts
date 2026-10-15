@@ -1,6 +1,7 @@
 import type { IsDurumu } from '@/generated/prisma'
 import { bugunIstanbul, parcala } from '@/core/tarih'
 import { prisma } from '../db'
+import { EVDS_PENCERESI } from './zamanlama'
 
 export interface IsSonucu {
   /** Sonuç sayıları (yeni/güncellenen/kapanan, uzatılan, hesaplanan...). Hatalı biten çalışmada da yazılır. */
@@ -46,13 +47,22 @@ export async function isCalistir(isAdi: string, fn: () => Promise<IsSonucu>): Pr
   return (await isCalistirAyrintili(isAdi, fn)).durum
 }
 
-/** Kapanışta bekleme süresi dolduğunda bu süreçte hâlâ yürüyen çalışmaları HATALI işaretler (işlem ve kilit süreç ölünce kendiliğinden düşer). */
+/**
+ * Süreç ölümüyle (kapanış beklemesinin dolması, çökme/SIGKILL) HATALI işaretlenen kayıtların iletileri. İşin kendi başarısızlığı
+ * değildir: gözetim bu kayıtlara bakıp işi geri çekmez (bkz. `isDurumuOzeti`).
+ */
+export const TAKILI_CALISMA_MESAJI = 'Süreç beklenmedik biçimde durdu (başlangıçta temizlendi).'
+export const TERK_EDILEN_CALISMA_MESAJI =
+  'Kapanış bekleme süresi doldu; çalışma yarıda bırakıldı (tamamlanan işlemler kayıtlı, yarım kalan işlem geri alındı).'
+const SUREC_OLUMU_MESAJLARI: readonly string[] = [TAKILI_CALISMA_MESAJI, TERK_EDILEN_CALISMA_MESAJI]
+
+/** Kapanışta bekleme süresi dolduğunda bu süreçte hâlâ yürüyen çalışmaları HATALI işaretler (açık işlem ve kilit süreç ölünce kendiliğinden düşer). */
 export async function yurutulenCalismalariTerket(): Promise<number> {
   const idler = [...yurutulenler]
   if (idler.length === 0) return 0
   const r = await prisma.isCalisma.updateMany({
     where: { id: { in: idler }, durum: 'CALISIYOR' },
-    data: { bitis: new Date(), durum: 'HATALI', hata: 'Kapanış bekleme süresi doldu; çalışma yarıda bırakıldı (işlem geri alındı).' },
+    data: { bitis: new Date(), durum: 'HATALI', hata: TERK_EDILEN_CALISMA_MESAJI },
   })
   return r.count
 }
@@ -67,33 +77,37 @@ export async function takiliCalismalariSupur(simdi: Date = new Date(), dakika: n
   const sinir = new Date(simdi.getTime() - dakika * 60_000)
   const r = await prisma.isCalisma.updateMany({
     where: { durum: 'CALISIYOR', baslangic: { lt: sinir } },
-    data: { bitis: simdi, durum: 'HATALI', hata: 'Süreç beklenmedik biçimde durdu (başlangıçta temizlendi).' },
+    data: { bitis: simdi, durum: 'HATALI', hata: TAKILI_CALISMA_MESAJI },
   })
   return r.count
 }
 
-/** Gözetim için bir işin durumu: son başarılı çalışmanın başlangıcı ve (takılı sayılmayacak kadar yeni) çalışan kayıt var mı. */
-export async function isDurumuOzeti(isAdi: string, simdi: Date = new Date()): Promise<{ sonBasari: Date | null; calisiyor: boolean }> {
-  const [basari, calisan] = await Promise.all([
+/**
+ * Gözetim için bir işin durumu: son başarılı çalışmanın başlangıcı; son çalışması (BASARILI/HATALI) HATALI ise onun başlangıcı;
+ * ve (takılı sayılmayacak kadar yeni) çalışan kayıt var mı. Süreç ölümüyle HATALI işaretlenen kayıtlar (`SUREC_OLUMU_MESAJLARI`)
+ * "son çalışma" sayılmaz: yeniden başlatma işin hatası değildir, geri çekilmeye yol açmamalı.
+ */
+export async function isDurumuOzeti(isAdi: string, simdi: Date = new Date()): Promise<{ sonBasari: Date | null; sonHatali: Date | null; calisiyor: boolean }> {
+  const [basari, sonlar, calisan] = await Promise.all([
     prisma.isCalisma.findFirst({ where: { isAdi, durum: 'BASARILI' }, orderBy: { baslangic: 'desc' }, select: { baslangic: true } }),
+    prisma.isCalisma.findMany({
+      where: { isAdi, durum: { in: ['BASARILI', 'HATALI'] } }, orderBy: { baslangic: 'desc' }, take: 10, select: { durum: true, baslangic: true, hata: true },
+    }),
     prisma.isCalisma.findFirst({
       where: { isAdi, durum: 'CALISIYOR', baslangic: { gte: new Date(simdi.getTime() - TAKILI_CALISMA_DAKIKA * 60_000) } }, select: { id: true },
     }),
   ])
-  return { sonBasari: basari?.baslangic ?? null, calisiyor: calisan !== null }
+  const son = sonlar.find((k) => k.durum === 'BASARILI' || !SUREC_OLUMU_MESAJLARI.includes(k.hata ?? ''))
+  return { sonBasari: basari?.baslangic ?? null, sonHatali: son?.durum === 'HATALI' ? son.baslangic : null, calisiyor: calisan !== null }
 }
 
 export async function sonCalismalar(sayi = 50) {
   return prisma.isCalisma.findMany({ orderBy: { baslangic: 'desc' }, take: sayi })
 }
 
-const BANT_ENCOK_KARAKTER = 300
-const kisalt = (s: string): string => (s.length > BANT_ENCOK_KARAKTER ? `${s.slice(0, BANT_ENCOK_KARAKTER - 1)}…` : s)
-
 const GUNLUK_ISLER = [['takvim-guncelle', 'Taksit planı ve artış hesabı'], ['hatirlatma-uret', 'Hatırlatma üretimi']] as const
 
-/** EVDS endeks çekimi ayın bu günleri arasında yapılır (worker çizelgesiyle aynı); bant yalnızca bu pencerede EVDS uyarısı verir. */
-const EVDS_PENCERESI = { ilkGun: 3, sonGun: 10 }
+const ISLER_EKRANI = 'ayrıntı İşler ekranında'
 
 function evdsPenceresindeMi(simdi: Date): boolean {
   const { gun } = parcala(bugunIstanbul(simdi))
@@ -101,11 +115,12 @@ function evdsPenceresindeMi(simdi: Date): boolean {
 }
 
 /**
- * Pano bandı uyarı metinleri:
+ * Pano bandı uyarı metinleri. Bant hata ya da ayrıntı metni taşımaz (Prisma/PostgreSQL iletileri, sunucu yolları içerebilir); yalnızca
+ * durumu söyler ve ayrıntıyı İşler ekranına bırakır:
  * - günlük işlerden son bitenin kaydı HATALI ise hemen; son 26 saatte başarılı çalışma yoksa; başarılıysa ama bazı sözleşmeler
- *   işlenemediyse (çalışma kaydındaki ayrıntı);
- * - EVDS: yalnızca ayın 3-10'u arasında (İstanbul) ve son çekim hatalıysa ("ulaşılamadı") ya da bazı aylar alınamadıysa (spec §8).
- *   Pencere dışında eksik değeri H4_EKSIK hatırlatması bildirir. "Son çekim", başka çalışma sürüyor diye atlanmış ya da
+ *   işlenemediyse (çalışma kaydındaki ayrıntı dolu);
+ * - EVDS: yalnızca ayın 3-10'u arasında (İstanbul, `EVDS_PENCERESI`) ve son çekim hatalıysa ("ulaşılamadı") ya da bazı aylar alınamadıysa
+ *   (spec §8). Pencere dışında eksik değeri H4_EKSIK hatırlatması bildirir. "Son çekim", başka çalışma sürüyor diye atlanmış ya da
  *   anahtarsız (elle giriş tercihi) çalışmaları saymaz.
  */
 export async function saglikDurumu(simdi: Date = new Date()): Promise<string[]> {
@@ -116,16 +131,14 @@ export async function saglikDurumu(simdi: Date = new Date()): Promise<string[]> 
       prisma.isCalisma.findFirst({ where: { isAdi: ad, durum: { in: ['BASARILI', 'HATALI'] } }, orderBy: { baslangic: 'desc' } }),
       prisma.isCalisma.findFirst({ where: { isAdi: ad, durum: 'BASARILI', baslangic: { gte: sinir } } }),
     ])
-    if (biten?.durum === 'HATALI') uyarilar.push(`${etiket} (${ad}) son çalışmada hata verdi: ${kisalt(biten.hata ?? 'bilinmeyen hata')}`)
+    if (biten?.durum === 'HATALI') uyarilar.push(`${etiket} (${ad}) son çalışmada hata verdi; ${ISLER_EKRANI}.`)
     if (!basari) uyarilar.push(`${etiket} son 26 saatte başarıyla çalışmadı; worker sürecini kontrol edin.`)
-    else if (biten?.durum === 'BASARILI' && biten.hata) {
-      uyarilar.push(`${etiket} tamamlandı ancak bazı kayıtlar işlenemedi: ${kisalt(biten.hata)} (ayrıntı: Zamanlanmış işler ekranı).`)
-    }
+    else if (biten?.durum === 'BASARILI' && biten.hata) uyarilar.push(`${etiket} tamamlandı ancak bazı sözleşmeler işlenemedi; ${ISLER_EKRANI}.`)
   }
   if (evdsPenceresindeMi(simdi)) {
     const endeks = await prisma.isCalisma.findFirst({ where: { isAdi: 'endeks-cek', durum: { in: ['BASARILI', 'HATALI'] } }, orderBy: { baslangic: 'desc' } })
-    if (endeks?.durum === 'HATALI') uyarilar.push(`EVDS'e ulaşılamadı (${kisalt(endeks.hata ?? 'bilinmeyen hata')}). Endeksler ekranından elle girin.`)
-    else if (endeks?.hata) uyarilar.push(`EVDS'ten bazı endeksler alınamadı (${kisalt(endeks.hata)}). Yayımlanmamış olabilir; Endeksler ekranından elle girebilirsiniz.`)
+    if (endeks?.durum === 'HATALI') uyarilar.push(`EVDS'e ulaşılamadı ya da yanıtı alınamadı; ${ISLER_EKRANI}. Endeksler ekranından elle girin.`)
+    else if (endeks?.hata) uyarilar.push(`EVDS'ten bazı endeksler alınamadı (yayımlanmamış olabilir); ${ISLER_EKRANI}. Endeksler ekranından elle girebilirsiniz.`)
   }
   return uyarilar
 }

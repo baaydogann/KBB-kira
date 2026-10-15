@@ -3,7 +3,7 @@ import { endeksIsi } from './endeks-cek'
 import { hatirlatmaIsi } from './hatirlatma-uret'
 import type { IsSonucu } from './kayit'
 import { takvimIsi } from './takvim-guncelle'
-import type { IsAdi } from './zamanlama'
+import { EVDS_PENCERESI, type IsAdi } from './zamanlama'
 
 export type { IsAdi }
 
@@ -21,5 +21,5 @@ export function isAdiMi(ad: string): ad is IsAdi {
 export const IS_ETIKETLERI: Record<IsAdi, string> = {
   'takvim-guncelle': 'Taksit planı, otomatik uzama, artış hesabı (her gün 05:30)',
   'hatirlatma-uret': 'Hatırlatma üretimi (her gün 06:00)',
-  'endeks-cek': "EVDS endeks çekimi (ayın 3–10'u, 10:15–17:15 saatlik)",
+  'endeks-cek': `EVDS endeks çekimi (ayın ${EVDS_PENCERESI.ilkGun}–${EVDS_PENCERESI.sonGun}'u, 10:15–17:15 saatlik)`,
 }

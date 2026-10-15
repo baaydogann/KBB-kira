@@ -28,11 +28,15 @@ async function calistir(ad: IsAdi): Promise<void> {
   }
 }
 
-/** Kaçırılan çalışmaları yakalar (bkz. gozetimTuru). Açılışta ve her yarım saatte çalışır; sıradan turlar yalnızca bir şey yaptığında günlüğe yazar. */
+/**
+ * Kaçırılan çalışmaları yakalar (bkz. gozetimTuru; her tur takılı kayıtları da süpürür). Açılışta ve her yarım saatte çalışır.
+ * Açılış turu toleranssızdır: kapalıyken zamanı gelen iş hemen yakalanır. Sıradan turlar yalnızca bir şey yaptığında günlüğe yazar.
+ */
 async function gozetim(kaynak: 'açılış' | 'periyodik'): Promise<void> {
   if (kapaniyor) return
   try {
-    const sonuclar = await gozetimTuru(calistir)
+    const { supurulen, sonuclar } = await gozetimTuru(calistir, { toleransMs: kaynak === 'açılış' ? 0 : undefined, durdu: () => kapaniyor })
+    if (supurulen > 0) console.log(`Gözetim (${kaynak}): takılı kalmış ${supurulen} çalışma HATALI işaretlendi.`)
     const ozet = sonuclar.map((s) => `${s.ad}=${s.karar}`).join(', ')
     if (kaynak === 'açılış' || sonuclar.some((s) => s.karar === 'calistirildi' || s.karar === 'hata')) console.log(`Gözetim (${kaynak}): ${ozet}`)
   } catch (e) {

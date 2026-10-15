@@ -105,6 +105,7 @@ export async function takvimIsi(bugun: Tarih): Promise<IsSonucu> {
     })
     const toplam = { uzatilan: 0, eklenen: 0, guncellenen: 0, iptal: 0, hesaplanan: 0, bekleyen: 0 }
     const hatalar: string[] = []
+    let beklenmeyen = 0
     for (const a of adaylar) {
       try {
         const s = await sozlesmeyiIsle(a, bugun)
@@ -118,11 +119,17 @@ export async function takvimIsi(bugun: Tarih): Promise<IsSonucu> {
       } catch (e) {
         console.error(`[takvim-guncelle] sözleşme #${a.id} işlenemedi:`, e)
         hatalar.push(iletiOlustur(a, e))
-        if (!kuralHatasiMi(e)) await takvimHatasiniBildir(a, e, bugun)
+        if (!kuralHatasiMi(e)) {
+          beklenmeyen += 1
+          await takvimHatasiniBildir(a, e, bugun)
+        }
       }
     }
     const ozet = `uzatılan: ${toplam.uzatilan}, sözleşme: ${adaylar.length}, eklenen: ${toplam.eklenen}, güncellenen: ${toplam.guncellenen}, iptal: ${toplam.iptal}, artış hesaplanan: ${toplam.hesaplanan}, endeks bekleyen: ${toplam.bekleyen}, hata: ${hatalar.length}`
-    return hatalar.length > 0 ? { ozet, ayrinti: hatalar.join(' | ') } : { ozet }
+    // Denenen her sözleşme beklenmeyen hatayla düştüyse sorun tek sözleşmede değil sistemdedir (veritabanı, şema, kod hatası): çalışma HATALI biter,
+    // sayılar özette kalır. İş kuralı hataları (işlemi tamamlanan sözleşmeler) bunu tetiklemez.
+    const sistemik = adaylar.length > 0 && beklenmeyen === adaylar.length
+    return { ozet, ...(hatalar.length > 0 ? { ayrinti: hatalar.join(' | ') } : {}), ...(sistemik ? { hatali: true } : {}) }
   })
   return r.calisti ? r.sonuc : { ozet: BASKA_CALISMA_MESAJI, atlandi: true }
 }

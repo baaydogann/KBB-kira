@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { GOZETIM_TOLERANSI_MS, gozetimKarari, IS_SIRASI, IS_ZAMANLARI, sonZamanlananZaman } from '@/server/isler/zamanlama'
+import {
+  EVDS_PENCERESI, GOZETIM_GERI_CEKILME_MS, GOZETIM_TOLERANSI_MS, gozetimKarari, IS_SIRASI, IS_ZAMANLARI, sonZamanlananZaman,
+} from '@/server/isler/zamanlama'
 
 const an = (s: string) => new Date(s)
 
@@ -34,6 +36,13 @@ describe('sonZamanlananZaman (Europe/Istanbul)', () => {
   })
 })
 
+describe('EVDS penceresi', () => {
+  it('3-10 aralığı tek yerde tanımlıdır ve endeks çizelgesi ondan türer', () => {
+    expect(EVDS_PENCERESI).toEqual({ ilkGun: 3, sonGun: 10 })
+    expect(IS_ZAMANLARI['endeks-cek']).toBe('15 10-17 3-10 * *')
+  })
+})
+
 describe('gozetimKarari', () => {
   const zamanlanan = an('2026-10-16T02:30:00Z')
   const sonra = (dakika: number) => new Date(zamanlanan.getTime() + dakika * 60_000)
@@ -61,6 +70,42 @@ describe('gozetimKarari', () => {
   it('tolerans parametreyle değiştirilebilir', () => {
     expect(gozetimKarari({ sonZamanlanan: zamanlanan, sonBasari: null, simdi: sonra(1), toleransMs: 0 })).toBe('calistir')
     expect(gozetimKarari({ sonZamanlanan: zamanlanan, sonBasari: null, simdi: sonra(30), toleransMs: 3_600_000 })).toBe('bekle')
+  })
+
+  describe('geri çekilme (HATALI biten işi 2 saat yeniden denememe)', () => {
+    const simdi = sonra(180)
+    const once = (dakika: number) => new Date(simdi.getTime() - dakika * 60_000)
+
+    it('son çalışması 2 saatten kısa süre önce HATALI başlamışsa geri çekilir', () => {
+      expect(gozetimKarari({ sonZamanlanan: zamanlanan, sonBasari: null, sonHatali: once(1), simdi })).toBe('geri-cekil')
+      expect(gozetimKarari({ sonZamanlanan: zamanlanan, sonBasari: null, sonHatali: once(119), simdi })).toBe('geri-cekil')
+      expect(gozetimKarari({ sonZamanlanan: zamanlanan, sonBasari: null, sonHatali: new Date(simdi.getTime() - GOZETIM_GERI_CEKILME_MS + 1), simdi })).toBe('geri-cekil')
+    })
+
+    it('tam 2 saat ya da daha eskiyse yeniden denenir', () => {
+      expect(gozetimKarari({ sonZamanlanan: zamanlanan, sonBasari: null, sonHatali: once(120), simdi })).toBe('calistir')
+      expect(gozetimKarari({ sonZamanlanan: zamanlanan, sonBasari: null, sonHatali: once(600), simdi })).toBe('calistir')
+    })
+
+    it('HATALI kaydı yoksa (null/belirsiz) geri çekilme olmaz', () => {
+      expect(gozetimKarari({ sonZamanlanan: zamanlanan, sonBasari: null, sonHatali: null, simdi })).toBe('calistir')
+      expect(gozetimKarari({ sonZamanlanan: zamanlanan, sonBasari: null, simdi })).toBe('calistir')
+    })
+
+    it('zamanlanmış andan sonra başarı varsa iş güncel kalır (geri çekilme değil)', () => {
+      expect(gozetimKarari({ sonZamanlanan: zamanlanan, sonBasari: once(10), sonHatali: once(1), simdi })).toBe('guncel')
+    })
+
+    it('zamanlanmış an toleransta ise bekle önceliklidir; açılış turu (tolerans 0) geri çekilmeyi yine uygular', () => {
+      const yakin = sonra(2)
+      expect(gozetimKarari({ sonZamanlanan: zamanlanan, sonBasari: null, sonHatali: new Date(yakin.getTime() - 60_000), simdi: yakin })).toBe('bekle')
+      expect(gozetimKarari({ sonZamanlanan: zamanlanan, sonBasari: null, sonHatali: new Date(yakin.getTime() - 60_000), simdi: yakin, toleransMs: 0 })).toBe('geri-cekil')
+      expect(gozetimKarari({ sonZamanlanan: zamanlanan, sonBasari: null, simdi: yakin, toleransMs: 0 })).toBe('calistir')
+    })
+
+    it('geri çekilme süresi parametreyle değiştirilebilir', () => {
+      expect(gozetimKarari({ sonZamanlanan: zamanlanan, sonBasari: null, sonHatali: once(30), simdi, geriCekilmeMs: 10 * 60_000 })).toBe('calistir')
+    })
   })
 
   it('geçmişte zamanlanmış an yoksa karar verilmez', () => {
