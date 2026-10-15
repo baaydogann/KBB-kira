@@ -1,10 +1,12 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { oranAyristir } from '@/core/para'
+import { oranAyristir, para } from '@/core/para'
 import { islemBaglami, kullaniciGerekli } from '@/server/auth/gerekli'
 import { endeksElleGir, endeksOnayla, oranSerisiMi } from '@/server/endeks/servis'
 import { basariDurumu, formDegerleri, formKimligi, formMetni, hataDurumu, type FormDurumu } from '@/app/_lib/form'
+
+const DUZ_ONDALIK = /^-?\d+(\.\d+)?$/
 
 const alanHatasi = (f: FormData, alan: string, mesaj: string): FormDurumu =>
   ({ hata: mesaj, alanHatalari: { [alan]: mesaj }, tamam: false, degerler: formDegerleri(f) })
@@ -16,8 +18,13 @@ export async function endeksOnaylaAction(_: FormDurumu, f: FormData): Promise<Fo
   const metin = formMetni(f, 'resmiDeger')
   const resmi = metin ? oranAyristir(metin) : null
   if (resmi && !resmi.ok) return alanHatasi(f, 'resmiDeger', resmi.hata.mesaj)
+  // Sayfada gösterilen EVDS değeri: sayfa açıldıktan sonra değiştiyse servis onayı reddeder.
+  const gorulen = formMetni(f, 'gorulenDeger')
+  if (!DUZ_ONDALIK.test(gorulen)) {
+    return { hata: 'Form verisi eksik veya geçersiz. Sayfayı yenileyin ve değeri bültenle tekrar karşılaştırın.', alanHatalari: {}, tamam: false, degerler: formDegerleri(f) }
+  }
   try {
-    await endeksOnayla(id, resmi && resmi.ok ? resmi.deger : null, await islemBaglami(k))
+    await endeksOnayla(id, resmi && resmi.ok ? resmi.deger : null, await islemBaglami(k), para(gorulen))
   } catch (e) {
     return hataDurumu(e, f)
   }

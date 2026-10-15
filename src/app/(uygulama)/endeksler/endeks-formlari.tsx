@@ -7,13 +7,17 @@ import { FormMesaji } from '@/components/form-durumu'
 import { BOS_FORM } from '@/app/_lib/form-durumu'
 import { endeksElleGirAction, endeksOnaylaAction } from './actions'
 
-/** Aynı sayfada birden çok onay formu olduğundan alan kimliği kayda özeldir (yinelenen id ve yanlış etiket bağı olmaz). */
-export function OnayFormu({ id }: { id: number }) {
+/**
+ * Aynı sayfada birden çok onay formu olduğundan alan kimliği kayda özeldir (yinelenen id ve yanlış etiket bağı olmaz).
+ * `deger`: sayfada gösterilen EVDS değeri; gizli alanla geri gönderilir, sayfa açıldıktan sonra değiştiyse sunucu onayı reddeder.
+ */
+export function OnayFormu({ id, deger }: { id: number; deger: string }) {
   const [durum, eylem, bekliyor] = useActionState(endeksOnaylaAction, BOS_FORM)
   const kimlik = `resmiDeger-${id}`
   return (
     <form action={eylem} className="space-y-2">
       <input type="hidden" name="id" value={id} />
+      <input type="hidden" name="gorulenDeger" value={deger} />
       <FormMesaji durum={durum} />
       <Alan etiket="TÜİK bülteninde yayımlanan değer (farklıysa)" ad={kimlik} hata={durum.alanHatalari.resmiDeger} ipucu="Boş bırakılırsa EVDS değeri onaylanır.">
         <Girdi id={kimlik} name="resmiDeger" placeholder="31,49" inputMode="decimal" autoComplete="off" defaultValue={durum.degerler?.resmiDeger} className="w-40" />

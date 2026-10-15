@@ -2,7 +2,7 @@ import { onIkiAyOrtalamaDegisim, yillikDegisim } from '@/core/endeks/degisim'
 import type { OranSerisi } from '@/core/hesap/artis'
 import type { Para } from '@/core/para'
 import { ayAnahtari, ayinIlkGunu, ayKaydir, bugunIstanbul, tarihinAyi, type Ay, type Tarih } from '@/core/tarih'
-import type { IslemBaglami } from '../baglam'
+import { SISTEM_BAGLAMI, type IslemBaglami } from '../baglam'
 import { prisma, type Tx } from '../db'
 import { denetimKaydi } from '../denetim'
 import { jsonYaz, paraDb } from '../donustur'
@@ -37,14 +37,19 @@ function oranDogrula(p: Para, alan: string): void {
   }
 }
 
-/** Hesaplanan bir oranı BEKLIYOR kaydı olarak yazar; onaylı, eşzamanlı onaylanan ya da değişmeyen kayda dokunmaz. */
-async function oranKaydet(db: Tx, seri: OranSerisi, hedef: Ay, deger: Para, seriKodu: string, ham: unknown, sonuc: EndeksCekSonucu): Promise<void> {
+/**
+ * Hesaplanan bir oranı BEKLIYOR kaydı olarak yazar; onaylı, eşzamanlı onaylanan ya da değişmeyen kayda dokunmaz.
+ * Yalnızca gerçekten yazılan satır için denetim kaydı düşer (yeniden çalıştırma sessizdir). Kayda API anahtarı girmez.
+ */
+async function oranKaydet(db: Tx, baglam: IslemBaglami, seri: OranSerisi, hedef: Ay, deger: Para, seriKodu: string, ham: unknown, sonuc: EndeksCekSonucu): Promise<void> {
   const etiket = `${seri} ${ayAnahtari(hedef)}`
   if (!oranMakulMu(deger)) {
     sonuc.atlanan.push(`${etiket}: hesaplanan ${deger.toString()} makul aralığın dışında (EVDS verisi hatalı olabilir).`)
     return
   }
-  const mevcut = await db.endeksDegeri.findUnique({ where: { seri_yil_ay: { seri, yil: hedef.yil, ay: hedef.ay } } })
+  const anahtar = { seri_yil_ay: { seri, yil: hedef.yil, ay: hedef.ay } }
+  const sonra = { seri, ay: ayAnahtari(hedef), deger: deger.toString(), seriKodu }
+  const mevcut = await db.endeksDegeri.findUnique({ where: anahtar })
   if (mevcut?.onayDurumu === 'ONAYLANDI') return
   if (mevcut) {
     if (mevcut.evdsDegeri !== null && paraDb(mevcut.evdsDegeri).equals(deger)) return
@@ -53,8 +58,12 @@ async function oranKaydet(db: Tx, seri: OranSerisi, hedef: Ay, deger: Para, seri
       where: { id: mevcut.id, onayDurumu: 'BEKLIYOR' },
       data: { deger: yaz4(deger), evdsDegeri: yaz4(deger), evdsSeriKodu: seriKodu, hamVeri: jsonYaz(ham) },
     })
-    if (yazilan.count === 0) sonuc.atlanan.push(`${etiket}: kayıt eşzamanlı olarak onaylandı; EVDS değeri yazılmadı.`)
-    else sonuc.guncellenen += 1
+    if (yazilan.count === 0) {
+      sonuc.atlanan.push(`${etiket}: kayıt eşzamanlı olarak onaylandı; EVDS değeri yazılmadı.`)
+      return
+    }
+    sonuc.guncellenen += 1
+    await denetimKaydi(db, baglam, { varlik: 'endeks', varlikId: mevcut.id, eylem: 'EVDS_GUNCELLE', once: { deger: paraDb(mevcut.deger).toString() }, sonra })
     return
   }
   // ON CONFLICT DO NOTHING: eşzamanlı çalışma aynı kaydı oluşturduysa hata (ve iptal edilen transaction) olmaz.
@@ -62,16 +71,22 @@ async function oranKaydet(db: Tx, seri: OranSerisi, hedef: Ay, deger: Para, seri
     data: [{ seri, yil: hedef.yil, ay: hedef.ay, deger: yaz4(deger), evdsDegeri: yaz4(deger), evdsSeriKodu: seriKodu, hamVeri: jsonYaz(ham), kaynak: 'EVDS', onayDurumu: 'BEKLIYOR' }],
     skipDuplicates: true,
   })
-  if (olusan.count === 0) sonuc.atlanan.push(`${etiket}: kayıt eşzamanlı olarak oluşturuldu.`)
-  else sonuc.olusturulan += 1
+  if (olusan.count === 0) {
+    sonuc.atlanan.push(`${etiket}: kayıt eşzamanlı olarak oluşturuldu.`)
+    return
+  }
+  sonuc.olusturulan += 1
+  const yeni = await db.endeksDegeri.findUniqueOrThrow({ where: anahtar, select: { id: true } })
+  await denetimKaydi(db, baglam, { varlik: 'endeks', varlikId: yeni.id, eylem: 'EVDS_CEK', sonra })
 }
 
 /**
  * Bir önceki ve iki önceki ayın oranlarını EVDS'ten hesaplar; onaylı kayıtlara dokunmaz.
  * Seri kodu hedef aya göre seçilir (baz yılları karıştırılmaz): 24 aylık pencerenin tamamı tek seriden gelir.
  * EVDS/parametre sorunları toplu işi durdurmaz; `hatalar`a (erişim, biçim, eksik parametre) ya da `atlanan`a (eksik/makul olmayan veri) yazılır.
+ * Yazılan her kayıt `EVDS_CEK` / `EVDS_GUNCELLE` denetim satırı bırakır (varsayılan bağlam: sistem).
  */
-export async function endeksCek(db: Tx, bugun: Tarih, s: EvdsSecenekleri): Promise<EndeksCekSonucu> {
+export async function endeksCek(db: Tx, bugun: Tarih, s: EvdsSecenekleri, baglam: IslemBaglami = SISTEM_BAGLAMI): Promise<EndeksCekSonucu> {
   const sonuc: EndeksCekSonucu = { olusturulan: 0, guncellenen: 0, atlanan: [], hatalar: [] }
   const hedefler = [ayKaydir(tarihinAyi(bugun), -2), ayKaydir(tarihinAyi(bugun), -1)]
   for (const sr of SERILER) {
@@ -95,7 +110,7 @@ export async function endeksCek(db: Tx, bugun: Tarih, s: EvdsSecenekleri): Promi
           sonuc.atlanan.push(`${seri} ${ayAnahtari(hedef)}: ${r.hata.mesaj}`)
           continue
         }
-        await oranKaydet(db, seri, hedef, r.deger, seriKodu, ham, sonuc)
+        await oranKaydet(db, baglam, seri, hedef, r.deger, seriKodu, ham, sonuc)
       }
     }
   }
@@ -106,14 +121,19 @@ export async function endeksCek(db: Tx, bugun: Tarih, s: EvdsSecenekleri): Promi
  * TÜİK bülteniyle karşılaştırılmış değer onaylanır. Resmi değer farklıysa o yazılır (kaynak ELLE), EVDS değeri saklanır.
  * Yazma, okunan satır durumuna (BEKLIYOR ve okunan değer) bağlıdır: iki kullanıcı aynı değeri onaylarsa yalnızca biri başarılır,
  * okuma ile onay arasında EVDS değeri değiştiyse kullanıcının görmediği değer onaylanmaz (CakismaHatasi).
+ * `gorulenDeger`: kullanıcının sayfada gördüğü (bültenle karşılaştırdığı) EVDS değeri; kayıttaki güncel değerden farklıysa
+ * (sayfa açıldıktan sonra `endeksCek` değeri değiştirdiyse) resmi değer girilmiş olsa da onay reddedilir.
  */
-export async function endeksOnayla(id: number, resmiDeger: Para | null, baglam: IslemBaglami): Promise<void> {
+export async function endeksOnayla(id: number, resmiDeger: Para | null, baglam: IslemBaglami, gorulenDeger?: Para): Promise<void> {
   if (resmiDeger !== null) oranDogrula(resmiDeger, 'resmiDeger')
   await prisma.$transaction(async (tx) => {
     const e = await tx.endeksDegeri.findUnique({ where: { id } })
     if (!e) throw new BulunamadiHatasi('Endeks kaydı bulunamadı.')
     if (e.onayDurumu === 'ONAYLANDI') throw new IsKuraliHatasi('ONAYLI', 'Bu endeks zaten onaylı.')
     const mevcut = paraDb(e.deger)
+    if (gorulenDeger !== undefined && !gorulenDeger.equals(mevcut)) {
+      throw new CakismaHatasi('EVDS değeri siz sayfayı açtıktan sonra değişti; sayfayı yenileyip bültenle tekrar karşılaştırın.')
+    }
     const farkli = resmiDeger !== null && !resmiDeger.equals(mevcut)
     const deger = farkli ? resmiDeger : mevcut
     const kaynak = farkli ? 'ELLE' : e.kaynak

@@ -10,7 +10,7 @@ vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }))
 import { endeksElleGirAction, endeksOnaylaAction } from '@/app/(uygulama)/endeksler/actions'
 import { prisma, type Tx } from '@/server/db'
 import { para } from '@/core/para'
-import { ayAnahtari, ayKaydir, tarih as t, type Ay } from '@/core/tarih'
+import { ayAnahtari, ayKaydir, bugunIstanbul, tarih as t, tarihinAyi, type Ay } from '@/core/tarih'
 import { EvdsHatasi, evdsSerisiGetir, evdsUrl } from '@/server/endeks/evds'
 import { onayliOranlariYukle } from '@/server/endeks/oranlar'
 import { bekleyenEndeksler, endeksCek, endeksElleGir, endeksOnayla, endeksTablosu } from '@/server/endeks/servis'
@@ -247,9 +247,9 @@ describe('endeks çekme ve onay', () => {
   })
 
   it('elle giriş onaylı kayıt açar; onaylı kaydı değiştirmez', async () => {
-    await endeksElleGir({ seri: 'TUFE_12AY_ORT', ay: { yil: 2026, ay: 10 }, deger: para('31.20') }, TEST_BAGLAMI)
+    await endeksElleGir({ seri: 'TUFE_12AY_ORT', ay: { yil: 2026, ay: 10 }, deger: para('31.20') }, TEST_BAGLAMI, t('2026-10-15'))
     expect((await onayliOranlariYukle()).oran('TUFE_12AY_ORT', { yil: 2026, ay: 10 })?.toString()).toBe('31.2')
-    await expect(endeksElleGir({ seri: 'TUFE_12AY_ORT', ay: { yil: 2026, ay: 10 }, deger: para('31.30') }, TEST_BAGLAMI)).rejects.toBeInstanceOf(IsKuraliHatasi)
+    await expect(endeksElleGir({ seri: 'TUFE_12AY_ORT', ay: { yil: 2026, ay: 10 }, deger: para('31.30') }, TEST_BAGLAMI, t('2026-10-15'))).rejects.toBeInstanceOf(IsKuraliHatasi)
     expect(ayAnahtari({ yil: 2026, ay: 10 })).toBe('2026-10')
   })
 })
@@ -318,7 +318,7 @@ describe('endeks çekme: EVDS kenar durumları (toplu iş çökmez)', () => {
   })
 
   it('onaylı değere dokunmaz', async () => {
-    await endeksElleGir({ seri: 'TUFE_12AY_ORT', ay: { yil: 2026, ay: 9 }, deger: para('11.38') }, TEST_BAGLAMI)
+    await endeksElleGir({ seri: 'TUFE_12AY_ORT', ay: { yil: 2026, ay: 9 }, deger: para('11.38') }, TEST_BAGLAMI, t('2026-10-15'))
     const r = await endeksCek(prisma, bugun, { apiAnahtari: 'k', fetchFn: sahteFetch([]) })
     expect(r.olusturulan).toBe(7)
     const k = await prisma.endeksDegeri.findUniqueOrThrow({ where: { seri_yil_ay: { seri: 'TUFE_12AY_ORT', yil: 2026, ay: 9 } } })
@@ -452,6 +452,24 @@ describe('onay', () => {
     expect(await prisma.olayGunlugu.count({ where: { varlik: 'endeks', eylem: 'ONAYLA' } })).toBe(0)
   })
 
+  it('sayfa açıldıktan sonra EVDS değeri değişirse görülen değerle onay reddedilir (resmi değer girilse de)', async () => {
+    const a = await bekleyenKayit()
+    const gorulen = para(a.deger.toString())
+    expect(gorulen.toFixed(2)).toBe('11.37')
+    await endeksCek(prisma, bugun, { apiAnahtari: 'k', fetchFn: aralikFetch([]) })
+    const b = await prisma.endeksDegeri.findUniqueOrThrow({ where: { id: a.id } })
+    expect([b.onayDurumu, b.deger.toFixed(2)]).toEqual(['BEKLIYOR', '1.19'])
+
+    await expect(endeksOnayla(a.id, null, TEST_BAGLAMI, gorulen)).rejects.toBeInstanceOf(CakismaHatasi)
+    await expect(endeksOnayla(a.id, para('11.38'), TEST_BAGLAMI, gorulen)).rejects.toThrow('EVDS değeri siz sayfayı açtıktan sonra değişti')
+    const o = await prisma.endeksDegeri.findUniqueOrThrow({ where: { id: a.id } })
+    expect([o.onayDurumu, o.kaynak, o.deger.toFixed(2), o.onaylayanId]).toEqual(['BEKLIYOR', 'EVDS', '1.19', null])
+    expect(await prisma.olayGunlugu.count({ where: { varlik: 'endeks', eylem: 'ONAYLA' } })).toBe(0)
+
+    await endeksOnayla(a.id, null, TEST_BAGLAMI, para(b.deger.toString()))
+    expect((await prisma.endeksDegeri.findUniqueOrThrow({ where: { id: a.id } })).onayDurumu).toBe('ONAYLANDI')
+  })
+
   it('okuma ile onay arasında EVDS değeri değişirse eski değer onaylanmaz', async () => {
     const k = await bekleyenKayit()
     let bekleyen: Promise<void> | undefined
@@ -468,10 +486,73 @@ describe('onay', () => {
   })
 })
 
+describe('endeksCek denetim kayıtları', () => {
+  const bugun = t('2026-10-15')
+  const ANAHTAR = 'GIZLI-ANAHTAR-123'
+  const gunluk = (eylem: string) => prisma.olayGunlugu.findMany({ where: { varlik: 'endeks', eylem }, orderBy: { id: 'asc' } })
+
+  it('ilk çekim her yeni kayıt için EVDS_CEK yazar; aynı veriyle yeniden çalıştırma hiçbir satır yazmaz', async () => {
+    const r = await endeksCek(prisma, bugun, { apiAnahtari: ANAHTAR, fetchFn: sahteFetch([]) })
+    expect(r.olusturulan).toBe(8)
+    const cek = await gunluk('EVDS_CEK')
+    expect(cek).toHaveLength(8)
+    const kayitlar = await prisma.endeksDegeri.findMany()
+    expect(new Set(cek.map((g) => g.varlikId))).toEqual(new Set(kayitlar.map((k) => String(k.id))))
+    expect(cek.every((g) => g.kullaniciId === null && g.once === null)).toBe(true)
+    const tufe = kayitlar.find((k) => k.seri === 'TUFE_12AY_ORT' && k.ay === 9)!
+    expect(cek.find((g) => g.varlikId === String(tufe.id))!.sonra).toEqual({ seri: 'TUFE_12AY_ORT', ay: '2026-09', deger: '11.37', seriKodu: 'TP.GENENDEKS.T1' })
+
+    const once = await prisma.olayGunlugu.count()
+    const ikinci = await endeksCek(prisma, bugun, { apiAnahtari: ANAHTAR, fetchFn: sahteFetch([]) })
+    expect([ikinci.olusturulan, ikinci.guncellenen]).toEqual([0, 0])
+    expect(await prisma.olayGunlugu.count()).toBe(once)
+  })
+
+  it('değişen EVDS değeri EVDS_GUNCELLE yazar (önceki ve yeni değerle); API anahtarı hiçbir satırda geçmez', async () => {
+    await endeksCek(prisma, bugun, { apiAnahtari: ANAHTAR, fetchFn: sahteFetch([]) })
+    const yillik = await prisma.endeksDegeri.findUniqueOrThrow({ where: { seri_yil_ay: { seri: 'TUFE_YILLIK', yil: 2026, ay: 9 } } })
+    const r = await endeksCek(prisma, bugun, { apiAnahtari: ANAHTAR, fetchFn: aralikFetch([]) })
+    expect(r.guncellenen).toBe(8)
+    expect(await gunluk('EVDS_CEK')).toHaveLength(8)
+    const guncelle = await gunluk('EVDS_GUNCELLE')
+    expect(guncelle).toHaveLength(r.guncellenen)
+    const g = guncelle.find((x) => x.varlikId === String(yillik.id))!
+    expect(g.once).toEqual({ deger: '10.81' })
+    expect(g.sonra).toEqual({ seri: 'TUFE_YILLIK', ay: '2026-09', deger: '1.19', seriKodu: 'TP.GENENDEKS.T1' })
+    expect(g.kullaniciId).toBeNull()
+    expect(JSON.stringify(await prisma.olayGunlugu.findMany())).not.toContain(ANAHTAR)
+    expect(JSON.stringify(await prisma.endeksDegeri.findMany())).not.toContain(ANAHTAR)
+  })
+
+  it('çağıranın bağlamı denetim satırına yazılır', async () => {
+    await endeksCek(prisma, bugun, { apiAnahtari: ANAHTAR, fetchFn: sahteFetch([]) }, { kullaniciId: null, ip: '10.0.0.7' })
+    const cek = await gunluk('EVDS_CEK')
+    expect(cek).toHaveLength(8)
+    expect(cek.every((g) => g.ip === '10.0.0.7')).toBe(true)
+  })
+
+  it('onaylanmış satır sonraki çekimde değişmez ve EVDS_GUNCELLE yazılmaz', async () => {
+    await endeksCek(prisma, bugun, { apiAnahtari: ANAHTAR, fetchFn: sahteFetch([]) })
+    const a = await prisma.endeksDegeri.findUniqueOrThrow({ where: { seri_yil_ay: { seri: 'TUFE_12AY_ORT', yil: 2026, ay: 9 } } })
+    await endeksOnayla(a.id, null, TEST_BAGLAMI, para(a.deger.toString()))
+    const onaylanan = await prisma.endeksDegeri.findUniqueOrThrow({ where: { id: a.id } })
+
+    const r = await endeksCek(prisma, bugun, { apiAnahtari: ANAHTAR, fetchFn: aralikFetch([]) })
+    expect(r.guncellenen).toBe(7)
+    const sonra = await prisma.endeksDegeri.findUniqueOrThrow({ where: { id: a.id } })
+    expect([sonra.deger.toFixed(4), sonra.evdsDegeri?.toFixed(4), sonra.kaynak, sonra.onayDurumu]).toEqual(['11.3700', '11.3700', 'EVDS', 'ONAYLANDI'])
+    expect(sonra.hamVeri).toEqual(onaylanan.hamVeri)
+    expect(sonra.evdsSeriKodu).toBe(onaylanan.evdsSeriKodu)
+    const guncelle = await gunluk('EVDS_GUNCELLE')
+    expect(guncelle).toHaveLength(7)
+    expect(guncelle.some((g) => g.varlikId === String(a.id))).toBe(false)
+  })
+})
+
 describe('elle giriş', () => {
   it('bekleyen EVDS kaydının üzerine yazar: ELLE/ONAYLANDI, EVDS değeri saklanır, denetim once ile yazılır', async () => {
     await endeksCek(prisma, t('2026-10-15'), { apiAnahtari: 'k', fetchFn: sahteFetch([]) })
-    await endeksElleGir({ seri: 'TUFE_12AY_ORT', ay: { yil: 2026, ay: 9 }, deger: para('11.50') }, TEST_BAGLAMI)
+    await endeksElleGir({ seri: 'TUFE_12AY_ORT', ay: { yil: 2026, ay: 9 }, deger: para('11.50') }, TEST_BAGLAMI, t('2026-10-15'))
     const o = await prisma.endeksDegeri.findUniqueOrThrow({ where: { seri_yil_ay: { seri: 'TUFE_12AY_ORT', yil: 2026, ay: 9 } } })
     expect([o.deger.toFixed(2), o.evdsDegeri?.toFixed(2), o.kaynak, o.onayDurumu]).toEqual(['11.50', '11.37', 'ELLE', 'ONAYLANDI'])
     const g = await prisma.olayGunlugu.findMany({ where: { varlik: 'endeks', eylem: 'ELLE_GIR' } })
@@ -498,7 +579,7 @@ describe('elle giriş', () => {
   })
 
   it('aynı ay için eşzamanlı iki giriş: biri başarılı, diğeri CakismaHatasi/IsKuraliHatasi; tek kayıt, tek denetim', async () => {
-    const giris = (d: string) => endeksElleGir({ seri: 'YIUFE_YILLIK', ay: { yil: 2026, ay: 9 }, deger: para(d) }, TEST_BAGLAMI)
+    const giris = (d: string) => endeksElleGir({ seri: 'YIUFE_YILLIK', ay: { yil: 2026, ay: 9 }, deger: para(d) }, TEST_BAGLAMI, t('2026-10-15'))
     const [a, b] = await Promise.allSettled([giris('20.10'), giris('20.20')])
     expect([a.status, b.status].sort()).toEqual(['fulfilled', 'rejected'])
     const red = (a.status === 'rejected' ? a : b) as PromiseRejectedResult
@@ -511,7 +592,7 @@ describe('elle giriş', () => {
     let bekleyen: Promise<void> | undefined
     await prisma.$transaction(async (tx) => {
       await tx.endeksDegeri.create({ data: { seri: 'YIUFE_YILLIK', yil: 2026, ay: 9, deger: '20', kaynak: 'ELLE', onayDurumu: 'ONAYLANDI' } })
-      bekleyen = endeksElleGir({ seri: 'YIUFE_YILLIK', ay: { yil: 2026, ay: 9 }, deger: para('21') }, TEST_BAGLAMI)
+      bekleyen = endeksElleGir({ seri: 'YIUFE_YILLIK', ay: { yil: 2026, ay: 9 }, deger: para('21') }, TEST_BAGLAMI, t('2026-10-15'))
       bekleyen.catch(() => undefined)
       await kilitBeklemesiniBekle()
     })
@@ -525,7 +606,7 @@ describe('elle giriş', () => {
     let bekleyen: Promise<void> | undefined
     await prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM endeks_degeri WHERE id = ${k.id} FOR UPDATE`
-      bekleyen = endeksElleGir({ seri: 'TUFE_12AY_ORT', ay: { yil: 2026, ay: 9 }, deger: para('11.50') }, TEST_BAGLAMI)
+      bekleyen = endeksElleGir({ seri: 'TUFE_12AY_ORT', ay: { yil: 2026, ay: 9 }, deger: para('11.50') }, TEST_BAGLAMI, t('2026-10-15'))
       bekleyen.catch(() => undefined)
       await kilitBeklemesiniBekle()
       await tx.endeksDegeri.update({ where: { id: k.id }, data: { onayDurumu: 'ONAYLANDI', kaynak: 'ELLE', deger: '20' } })
@@ -538,7 +619,7 @@ describe('elle giriş', () => {
 describe('listeler', () => {
   it('bekleyenler yeniden eskiye sıralanır; tablo onaylı ve bekleyen değerleri, bu ayın elle girişini gösterir', async () => {
     await endeksCek(prisma, t('2026-10-15'), { apiAnahtari: 'k', fetchFn: sahteFetch([]) })
-    await endeksElleGir({ seri: 'TUFE_12AY_ORT', ay: { yil: 2026, ay: 10 }, deger: para('31.20') }, TEST_BAGLAMI)
+    await endeksElleGir({ seri: 'TUFE_12AY_ORT', ay: { yil: 2026, ay: 10 }, deger: para('31.20') }, TEST_BAGLAMI, t('2026-10-15'))
     const bekleyen = await bekleyenEndeksler()
     expect(bekleyen).toHaveLength(8)
     expect(bekleyen.slice(0, 4).every((k) => k.yil === 2026 && k.ay === 9)).toBe(true)
@@ -567,15 +648,18 @@ describe("server action'lar", () => {
     return f
   }
   const BOS = { hata: null, alanHatalari: {}, tamam: false }
+  /** Sayfadaki onay formu: gizli `id` ve gosterilen EVDS degeri (`gorulenDeger`) her gonderimde gelir. */
+  const onayFormu = (k: { id: number; deger: { toString(): string } }, ek: Record<string, string> = {}) =>
+    form({ id: String(k.id), gorulenDeger: k.deger.toString(), ...ek })
 
   beforeEach(async () => {
     await prisma.kullanici.create({ data: { id: 1, kullaniciAdi: 'test', adSoyad: 'Test', sifreHash: 'x' } })
   })
 
   it('elle giriş: kaydeder, onaylayanı ve denetimi yazar', async () => {
-    const r = await endeksElleGirAction(BOS, form({ seri: 'YIUFE_YILLIK', ay: '2026-09', deger: '%23,45' }))
+    const r = await endeksElleGirAction(BOS, form({ seri: 'YIUFE_YILLIK', ay: '2025-09', deger: '%23,45' }))
     expect(r).toMatchObject({ tamam: true, hata: null })
-    const k = await prisma.endeksDegeri.findUniqueOrThrow({ where: { seri_yil_ay: { seri: 'YIUFE_YILLIK', yil: 2026, ay: 9 } } })
+    const k = await prisma.endeksDegeri.findUniqueOrThrow({ where: { seri_yil_ay: { seri: 'YIUFE_YILLIK', yil: 2025, ay: 9 } } })
     expect([k.deger.toFixed(4), k.kaynak, k.onayDurumu, k.onaylayanId]).toEqual(['23.4500', 'ELLE', 'ONAYLANDI', 1])
     const g = await prisma.olayGunlugu.findMany({ where: { varlik: 'endeks' } })
     expect(g.map((x) => [x.eylem, x.kullaniciId])).toEqual([['ELLE_GIR', 1]])
@@ -583,8 +667,8 @@ describe("server action'lar", () => {
 
   it('elle giriş: doğrulama hataları alan hatası verir ve girilen değerleri korur', async () => {
     const dene = (alanlar: Record<string, string>) => endeksElleGirAction(BOS, form(alanlar))
-    const gecerli = { seri: 'TUFE_YILLIK', ay: '2026-09', deger: '31,49' }
-    for (const [alan, kotu] of [['seri', 'YOK'], ['ay', '2026-9'], ['ay', '2026-13'], ['ay', '2036-10'], ['deger', '31.49'], ['deger', '3149'], ['deger', '']] as const) {
+    const gecerli = { seri: 'TUFE_YILLIK', ay: '2025-09', deger: '31,49' }
+    for (const [alan, kotu] of [['seri', 'YOK'], ['ay', '2026-9'], ['ay', '2026-13'], ['ay', `${tarihinAyi(bugunIstanbul()).yil + 1}-01`], ['deger', '31.49'], ['deger', '3149'], ['deger', '']] as const) {
       const girdi = { ...gecerli, [alan]: kotu }
       const r = await dene(girdi)
       expect(r.tamam).toBe(false)
@@ -595,8 +679,8 @@ describe("server action'lar", () => {
   })
 
   it('elle giriş: onaylı kayıt için hata verir; değerler korunur', async () => {
-    await endeksElleGirAction(BOS, form({ seri: 'TUFE_YILLIK', ay: '2026-09', deger: '31,49' }))
-    const r = await endeksElleGirAction(BOS, form({ seri: 'TUFE_YILLIK', ay: '2026-09', deger: '31,50' }))
+    await endeksElleGirAction(BOS, form({ seri: 'TUFE_YILLIK', ay: '2025-09', deger: '31,49' }))
+    const r = await endeksElleGirAction(BOS, form({ seri: 'TUFE_YILLIK', ay: '2025-09', deger: '31,50' }))
     expect(r.tamam).toBe(false)
     expect(r.hata).toContain('Onaylı endeks değiştirilemez')
     expect(r.degerler).toMatchObject({ deger: '31,50' })
@@ -608,10 +692,10 @@ describe("server action'lar", () => {
     for (const kotu of ['', 'abc', '1e3', '0x10', '-1', '99999999999999999999']) {
       expect((await endeksOnaylaAction(BOS, form({ id: kotu }))).hata).toBe('Kayıt seçilmedi.')
     }
-    const bicim = await endeksOnaylaAction(BOS, form({ id: String(k.id), resmiDeger: '11.38' }))
+    const bicim = await endeksOnaylaAction(BOS, onayFormu(k, { resmiDeger: '11.38' }))
     expect(Object.keys(bicim.alanHatalari)).toEqual(['resmiDeger'])
     expect(bicim.degerler).toMatchObject({ resmiDeger: '11.38' })
-    const aralik = await endeksOnaylaAction(BOS, form({ id: String(k.id), resmiDeger: '5000' }))
+    const aralik = await endeksOnaylaAction(BOS, onayFormu(k, { resmiDeger: '5000' }))
     expect(Object.keys(aralik.alanHatalari)).toEqual(['resmiDeger'])
     expect((await prisma.endeksDegeri.findUniqueOrThrow({ where: { id: k.id } })).onayDurumu).toBe('BEKLIYOR')
   })
@@ -619,11 +703,26 @@ describe("server action'lar", () => {
   it('onay: resmi değerle onaylar (ELLE), tekrar onay hata verir', async () => {
     await endeksCek(prisma, t('2026-10-15'), { apiAnahtari: 'k', fetchFn: sahteFetch([]) })
     const k = await prisma.endeksDegeri.findUniqueOrThrow({ where: { seri_yil_ay: { seri: 'TUFE_12AY_ORT', yil: 2026, ay: 9 } } })
-    const r = await endeksOnaylaAction(BOS, form({ id: String(k.id), resmiDeger: '11,38' }))
+    const r = await endeksOnaylaAction(BOS, onayFormu(k, { resmiDeger: '11,38' }))
     expect(r).toMatchObject({ tamam: true, mesaj: 'Endeks onaylandı.' })
     const o = await prisma.endeksDegeri.findUniqueOrThrow({ where: { id: k.id } })
     expect([o.deger.toFixed(2), o.kaynak, o.onayDurumu, o.onaylayanId]).toEqual(['11.38', 'ELLE', 'ONAYLANDI', 1])
-    const tekrar = await endeksOnaylaAction(BOS, form({ id: String(k.id) }))
+    const tekrar = await endeksOnaylaAction(BOS, onayFormu(k))
     expect([tekrar.tamam, tekrar.hata]).toEqual([false, 'Bu endeks zaten onaylı.'])
+  })
+
+  it('onay: görülen değer eksik/bozuksa Sayfayı yenileyin hatası; değer değiştiyse çakışma, kayıt BEKLIYOR kalır', async () => {
+    await endeksCek(prisma, t('2026-10-15'), { apiAnahtari: 'k', fetchFn: sahteFetch([]) })
+    const a = await prisma.endeksDegeri.findUniqueOrThrow({ where: { seri_yil_ay: { seri: 'TUFE_12AY_ORT', yil: 2026, ay: 9 } } })
+    for (const kotu of [undefined, '', 'abc', '11,37', '1e3']) {
+      const r = await endeksOnaylaAction(BOS, form(kotu === undefined ? { id: String(a.id) } : { id: String(a.id), gorulenDeger: kotu }))
+      expect([r.tamam, r.hata]).toEqual([false, expect.stringContaining('Sayfayı yenileyin')])
+    }
+    await endeksCek(prisma, t('2026-10-15'), { apiAnahtari: 'k', fetchFn: aralikFetch([]) })
+    const r = await endeksOnaylaAction(BOS, form({ id: String(a.id), gorulenDeger: a.deger.toString(), resmiDeger: '11,38' }))
+    expect([r.tamam, r.hata]).toEqual([false, expect.stringContaining('sayfayı yenileyip bültenle tekrar karşılaştırın')])
+    expect(r.degerler).toMatchObject({ resmiDeger: '11,38' })
+    const o = await prisma.endeksDegeri.findUniqueOrThrow({ where: { id: a.id } })
+    expect([o.onayDurumu, o.kaynak, o.deger.toFixed(2)]).toEqual(['BEKLIYOR', 'EVDS', '1.19'])
   })
 })

@@ -29,7 +29,7 @@ export default async function EndekslerSayfasi() {
                   <p className="mb-2 text-sm">
                     <strong>{SERI_ADI[e.seri]}</strong> — {ayAdi({ yil: e.yil, ay: e.ay })}: EVDS hesabı <strong><OranMetni deger={e.deger.toString()} /></strong> ({e.evdsSeriKodu})
                   </p>
-                  <OnayFormu id={e.id} />
+                  <OnayFormu id={e.id} deger={e.deger.toString()} />
                 </div>
               ))}
             </div>
