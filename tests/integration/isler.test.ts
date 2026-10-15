@@ -34,7 +34,7 @@ import { para } from '@/core/para'
 import { ayKaydir, tarih as t } from '@/core/tarih'
 import { endeksElleGir, endeksVerisiniGetir, endeksYaz } from '@/server/endeks/servis'
 import { gozetimTuru } from '@/server/isler/gozetim'
-import { tekKopya, BASKA_CALISMA_MESAJI } from '@/server/isler/tek-kopya'
+import { BASKA_CALISMA_MESAJI, isKilidiTutuluyorMu, tekKopya } from '@/server/isler/tek-kopya'
 import {
   isCalistir, saglikDurumu, takiliCalismalariSupur, TAKILI_CALISMA_MESAJI, TERK_EDILEN_CALISMA_MESAJI, yurutulenCalismalariTerket, type IsSonucu,
 } from '@/server/isler/kayit'
@@ -128,6 +128,69 @@ describe('tek kopya kilidi', () => {
   it('iş hata verirse hata yayılır ve kilit bırakılır', async () => {
     await expect(tekKopya('hata', async () => { throw new Error('patladı') })).rejects.toThrow('patladı')
     expect(await tekKopya('hata', async () => 1)).toEqual({ calisti: true, sonuc: 1 })
+  })
+})
+
+describe('kilit sorgusu (isKilidiTutuluyorMu)', () => {
+  const hash = async (ad: string) => (await prisma.$queryRaw<{ h: number }[]>`SELECT hashtext(${ad}) AS h`)[0]!.h
+
+  /** hashtext değeri negatif ve pozitif birer iş adı: 64 bit birleştirme işaretli anahtarı geri vermeli. */
+  async function negatifVePozitifAd(): Promise<{ negatif: string; pozitif: string }> {
+    let negatif: string | undefined
+    let pozitif: string | undefined
+    for (let i = 0; i < 200 && (negatif === undefined || pozitif === undefined); i++) {
+      const ad = `kilit-deneme-${i}`
+      if ((await hash(ad)) < 0) negatif ??= ad
+      else pozitif ??= ad
+    }
+    return { negatif: negatif!, pozitif: pozitif! }
+  }
+
+  it('tekKopya kilidi tutarken true, değilken false döner; negatif ve pozitif hash için; başka ad etkilenmez', async () => {
+    const { negatif, pozitif } = await negatifVePozitifAd()
+    expect([(await hash(negatif)) < 0, (await hash(pozitif)) > 0]).toEqual([true, true])
+    for (const ad of [negatif, pozitif, 'takvim-guncelle', 'hatirlatma-uret', 'endeks-cek']) {
+      expect(await isKilidiTutuluyorMu(prisma, ad)).toBe(false)
+      const r = await tekKopya(ad, async () => ({
+        kendisi: await isKilidiTutuluyorMu(prisma, ad),
+        baskasi: await isKilidiTutuluyorMu(prisma, `${ad}-baska`),
+      }))
+      expect(r).toEqual({ calisti: true, sonuc: { kendisi: true, baskasi: false } })
+      expect(await isKilidiTutuluyorMu(prisma, ad)).toBe(false)
+    }
+  })
+
+  it('ham pg_advisory_xact_lock(hashtext(ad)) tutan işlem de görünür (negatif ve pozitif hash)', async () => {
+    const { negatif, pozitif } = await negatifVePozitifAd()
+    for (const ad of [negatif, pozitif]) {
+      let birak: () => void = () => undefined
+      const serbest = new Promise<void>((tamam) => { birak = tamam })
+      let alindi: () => void = () => undefined
+      const hazir = new Promise<void>((tamam) => { alindi = tamam })
+      const tutan = prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${ad}))`
+        alindi()
+        await serbest
+      }, { timeout: 60_000 })
+      await hazir
+      try {
+        expect(await isKilidiTutuluyorMu(prisma, ad)).toBe(true)
+        expect(await isKilidiTutuluyorMu(prisma, `${ad}-baska`)).toBe(false)
+      } finally {
+        birak()
+        await tutan
+      }
+      expect(await isKilidiTutuluyorMu(prisma, ad)).toBe(false)
+    }
+  })
+
+  it('salt okunurdur: sorgulayan işlem kilit almaz (isKilidiniDene alırdı)', async () => {
+    const tutulan = await prisma.$transaction(async (tx) => {
+      expect(await isKilidiTutuluyorMu(tx, 'takvim-guncelle')).toBe(false)
+      const [r] = await tx.$queryRaw<{ n: bigint }[]>`SELECT count(*) AS n FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid()`
+      return r?.n
+    })
+    expect(tutulan).toBe(0n)
   })
 })
 

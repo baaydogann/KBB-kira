@@ -1,7 +1,7 @@
 import type { IsDurumu } from '@/generated/prisma'
 import { bugunIstanbul, parcala } from '@/core/tarih'
 import { prisma } from '../db'
-import { isKilidiBosMu, isKilidiniDene } from './tek-kopya'
+import { isKilidiniDene, isKilidiTutuluyorMu } from './tek-kopya'
 import { EVDS_PENCERESI } from './zamanlama'
 
 export interface IsSonucu {
@@ -106,7 +106,8 @@ export async function takiliCalismalariSupur(simdi: Date = new Date(), dakika: n
 /**
  * Gözetim için bir işin durumu: son başarılı çalışmanın başlangıcı; son çalışması (BASARILI/HATALI) HATALI ise onun başlangıcı;
  * ve iş şu an çalışıyor mu. "Çalışıyor": CALISIYOR kaydı var VE işin danışma kilidi tutuluyor (yaştan bağımsız: uzun süren bir iş de
- * canlıdır; kilit boşsa kayıt takılıdır ve süpürülecektir, işin yeniden çalıştırılmasına engel olmaz). Süreç ölümüyle HATALI işaretlenen
+ * canlıdır; kilit boşsa kayıt takılıdır ve süpürülecektir, işin yeniden çalıştırılmasına engel olmaz). Kilit salt okunur sorgulanır
+ * (`isKilidiTutuluyorMu`): durum denetimi kilit almaz, işlem açmaz. Süreç ölümüyle HATALI işaretlenen
  * kayıtlar (`SUREC_OLUMU_MESAJLARI`) "son çalışma" sayılmaz: yeniden başlatma işin hatası değildir, geri çekilmeye yol açmamalı.
  */
 export async function isDurumuOzeti(isAdi: string): Promise<{ sonBasari: Date | null; sonHatali: Date | null; calisiyor: boolean }> {
@@ -118,7 +119,7 @@ export async function isDurumuOzeti(isAdi: string): Promise<{ sonBasari: Date | 
     prisma.isCalisma.findFirst({ where: { isAdi, durum: 'CALISIYOR' }, select: { id: true } }),
   ])
   const son = sonlar.find((k) => k.durum === 'BASARILI' || !SUREC_OLUMU_MESAJLARI.includes(k.hata ?? ''))
-  const calisiyor = calisan !== null && !(await isKilidiBosMu(isAdi))
+  const calisiyor = calisan !== null && (await isKilidiTutuluyorMu(prisma, isAdi))
   return { sonBasari: basari?.baslangic ?? null, sonHatali: son?.durum === 'HATALI' ? son.baslangic : null, calisiyor }
 }
 

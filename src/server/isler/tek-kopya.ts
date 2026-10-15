@@ -11,16 +11,27 @@ export const BASKA_CALISMA_MESAJI = 'Başka bir çalışma sürüyor; daha sonra
 
 /**
  * İşin danışma kilidini BU işlemde dener (alırsa işlem bitene dek tutar). Anahtar tek yerde tanımlıdır: `tekKopya`, takılı kayıt süpürmesi
- * ve gözetimin "çalışıyor mu" denetimi aynı `hashtext(isAdi)` değerini kullanır, böylece biri kilidi tutuyorsa hepsi görür.
+ * ve gözetimin "çalışıyor mu" denetimi (`isKilidiTutuluyorMu`) aynı `hashtext(isAdi)` değerini kullanır, böylece biri kilidi tutuyorsa hepsi görür.
  */
 export async function isKilidiniDene(tx: Tx, isAdi: string): Promise<boolean> {
   const [r] = await tx.$queryRaw<{ alindi: boolean }[]>`SELECT pg_try_advisory_xact_lock(hashtext(${isAdi})) AS alindi`
   return r?.alindi === true
 }
 
-/** İşin kilidi boşsa true (kısa bir işlemde alınıp hemen bırakılır); biri tutuyorsa iş worker'da ya da web sürecinde canlı demektir. */
-export async function isKilidiBosMu(isAdi: string): Promise<boolean> {
-  return prisma.$transaction((tx) => isKilidiniDene(tx, isAdi), { timeout: 10_000, maxWait: 10_000 })
+/**
+ * İşin danışma kilidi şu an bir yerde (worker ya da web süreci) tutuluyor mu? Salt okunur: kilidi ALMAZ, işlem açmaz, `pg_locks`'a bakar;
+ * bu yüzden zamanlayıcının aynı saniyedeki kendi tetiklemesiyle yarışıp onu ATLANDI yapamaz (`isKilidiniDene` yapardı).
+ * `pg_try_advisory_xact_lock(bigint)` anahtarı `pg_locks`ta `classid` (üst 32 bit) ve `objid` (alt 32 bit) olarak, `objsubid = 1` ile görünür;
+ * `hashtext` negatif olabilir, işaretli 64 bit birleştirme anahtarı aynen geri verir.
+ */
+export async function isKilidiTutuluyorMu(db: Tx, isAdi: string): Promise<boolean> {
+  const [r] = await db.$queryRaw<{ tutuluyor: boolean }[]>`
+    SELECT EXISTS (
+      SELECT 1 FROM pg_locks
+      WHERE locktype = 'advisory' AND objsubid = 1 AND granted
+        AND ((classid::bigint << 32) | objid::bigint) = hashtext(${isAdi})::bigint
+    ) AS tutuluyor`
+  return r?.tutuluyor === true
 }
 
 /**
