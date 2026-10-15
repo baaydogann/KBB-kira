@@ -2,8 +2,10 @@ import { formatOran, para } from '@/core/para'
 import { ayAdi } from '@/core/tarih'
 import { kullaniciGerekli } from '@/server/auth/gerekli'
 import { panoVerisi, type PanoSekmesi } from '@/server/hatirlatma/servis'
+import { saglikDurumu } from '@/server/isler/kayit'
 import { SayfaBasligi } from '@/components/sayfa-basligi'
 import { Sekmeler } from '@/components/ui/sekmeler'
+import { Uyari } from '@/components/ui/uyari'
 import { HatirlatmaSatiri } from '@/components/hatirlatma-satiri'
 
 const SEKMELER: { anahtar: PanoSekmesi; etiket: string }[] = [
@@ -18,12 +20,13 @@ function Kart({ etiket, deger, ton }: { etiket: string; deger: string; ton?: str
 export default async function PanoSayfasi({ searchParams }: { searchParams: Promise<{ sekme?: string | string[] }> }) {
   await kullaniciGerekli()
   const { sekme } = await searchParams
-  const p = await panoVerisi()
+  const [p, saglik] = await Promise.all([panoVerisi(), saglikDurumu()])
   // Bilinmeyen ya da çoklu sekme değeri varsayılana düşer: gecikmiş iş varsa o, yoksa bugün.
   const aktif: PanoSekmesi = SEKMELER.find((s) => s.anahtar === sekme)?.anahtar ?? (p.listeler.gecikmis.length ? 'gecikmis' : 'bugun')
   return (
     <>
       <SayfaBasligi baslik="Pano" />
+      {saglik.length ? <div className="mb-4 space-y-1">{saglik.map((u) => <Uyari key={u} ton="hata">{u}</Uyari>)}</div> : null}
       <div className="mb-4 grid gap-3 md:grid-cols-4">
         <Kart etiket="Gecikmiş" deger={String(p.kartlar.gecikmis)} ton={p.kartlar.gecikmis ? 'text-red-600' : ''} />
         <Kart etiket="Bu hafta vadesi gelen" deger={String(p.kartlar.buHaftaVade)} />
