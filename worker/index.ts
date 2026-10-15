@@ -2,10 +2,11 @@ import { Cron } from 'croner'
 import { bugunIstanbul } from '@/core/tarih'
 import { prisma } from '@/server/db'
 import { ortam } from '@/server/env'
-import { ISLER, type IsAdi } from '@/server/isler'
-import { isCalistir } from '@/server/isler/kayit'
+import { ISLER } from '@/server/isler'
+import { gozetimTuru } from '@/server/isler/gozetim'
+import { isCalistir, takiliCalismalariSupur, yurutulenCalismalariTerket } from '@/server/isler/kayit'
+import { GOZETIM_ZAMANI, IS_ZAMANLARI, ZAMAN_DILIMI, type IsAdi } from '@/server/isler/zamanlama'
 
-const ZAMAN_DILIMI = 'Europe/Istanbul'
 /** Kapanışta çalışan işlerin bitmesi için beklenen en uzun süre (Docker'ın varsayılan 10 sn'lik SIGTERM süresine sığar). */
 const KAPANIS_BEKLEME_MS = 8_000
 
@@ -13,8 +14,10 @@ const KAPANIS_BEKLEME_MS = 8_000
 ortam()
 
 const calisanlar = new Set<Promise<unknown>>()
+const isler: Cron[] = []
+let kapaniyor = false
 
-/** "Bugün" her çalışmanın başında hesaplanır: açılıştaki telafi ve gün aşımı sonrası tetiklenen çalışmalar doğru günü kullanır. */
+/** "Bugün" her çalışmanın başında hesaplanır: gözetimin telafi çalışmaları ve gün aşımı sonrası tetiklenen çalışmalar doğru günü kullanır. */
 async function calistir(ad: IsAdi): Promise<void> {
   const p = isCalistir(ad, () => ISLER[ad](bugunIstanbul()))
   calisanlar.add(p)
@@ -25,27 +28,35 @@ async function calistir(ad: IsAdi): Promise<void> {
   }
 }
 
-const ortak = { timezone: ZAMAN_DILIMI, protect: true, catch: (e: unknown) => console.error('Zamanlayıcı hatası:', e) }
-
-const isler = [
-  new Cron('30 5 * * *', ortak, () => calistir('takvim-guncelle')),
-  new Cron('0 6 * * *', ortak, () => calistir('hatirlatma-uret')),
-  new Cron('15 10-17 3-10 * *', ortak, () => calistir('endeks-cek')),
-]
-
-let kapaniyor = false
-
-async function telafi(): Promise<void> {
-  // Sunucu 05:30/06:00'da kapalıysa iş kaçmasın: açılışta sırayla bir kez çalıştır. İşler idempotenttir (her biri yalnızca
-  // eksik/değişen kaydı yazar) ve kilit alınamazsa atlanır; bir işin hatası diğerlerini engellemez.
-  for (const ad of ['takvim-guncelle', 'endeks-cek', 'hatirlatma-uret'] as const) {
-    if (kapaniyor) return
-    try {
-      await calistir(ad)
-    } catch (e) {
-      console.error(`Telafi çalışması başarısız (${ad}):`, e)
-    }
+/** Kaçırılan çalışmaları yakalar (bkz. gozetimTuru). Açılışta ve her yarım saatte çalışır; sıradan turlar yalnızca bir şey yaptığında günlüğe yazar. */
+async function gozetim(kaynak: 'açılış' | 'periyodik'): Promise<void> {
+  if (kapaniyor) return
+  try {
+    const sonuclar = await gozetimTuru(calistir)
+    const ozet = sonuclar.map((s) => `${s.ad}=${s.karar}`).join(', ')
+    if (kaynak === 'açılış' || sonuclar.some((s) => s.karar === 'calistirildi' || s.karar === 'hata')) console.log(`Gözetim (${kaynak}): ${ozet}`)
+  } catch (e) {
+    console.error('Gözetim turu başarısız:', e)
   }
+}
+
+async function baslat(): Promise<void> {
+  // Önceki süreç ölürken CALISIYOR kalan kayıtlar, başka hiçbir şey yapılmadan temizlenir.
+  try {
+    const temizlenen = await takiliCalismalariSupur()
+    console.log(temizlenen > 0 ? `Takılı kalmış ${temizlenen} çalışma HATALI işaretlendi.` : 'Takılı kalmış çalışma yok.')
+  } catch (e) {
+    console.error('Takılı çalışmalar temizlenemedi:', e)
+  }
+
+  if (kapaniyor) return
+  const ortak = { timezone: ZAMAN_DILIMI, protect: true, catch: (e: unknown) => console.error('Zamanlayıcı hatası:', e) }
+  for (const ad of Object.keys(IS_ZAMANLARI) as IsAdi[]) isler.push(new Cron(IS_ZAMANLARI[ad], ortak, () => calistir(ad)))
+  isler.push(new Cron(GOZETIM_ZAMANI, ortak, () => gozetim('periyodik')))
+  console.log(`Worker başladı (${ZAMAN_DILIMI}). Sonraki çalışmalar:`, isler.map((c) => c.nextRun()?.toISOString()))
+
+  // Koşulsuz açılış çalıştırması yok: gözetim yalnızca zamanlanmış anından beri başarılı çalışması olmayan işleri çalıştırır.
+  await gozetim('açılış')
 }
 
 async function kapat(sinyal: string): Promise<void> {
@@ -53,8 +64,16 @@ async function kapat(sinyal: string): Promise<void> {
   kapaniyor = true
   console.log(`${sinyal} alındı; yeni çalışma başlatılmıyor, çalışan işler bekleniyor.`)
   for (const c of isler) c.stop()
-  const sureDoldu = new Promise<void>((tamam) => setTimeout(tamam, KAPANIS_BEKLEME_MS))
-  await Promise.race([Promise.allSettled([...calisanlar]), sureDoldu])
+  const sureDoldu = new Promise<false>((tamam) => setTimeout(() => tamam(false), KAPANIS_BEKLEME_MS))
+  const bitti = await Promise.race([Promise.allSettled([...calisanlar]).then(() => true), sureDoldu])
+  if (!bitti) {
+    try {
+      const n = await yurutulenCalismalariTerket()
+      console.log(`Bekleme süresi doldu; yarıda kalan ${n} çalışma HATALI işaretlendi.`)
+    } catch (e) {
+      console.error('Yarıda kalan çalışmalar işaretlenemedi:', e)
+    }
+  }
   await prisma.$disconnect()
   process.exit(0)
 }
@@ -62,5 +81,4 @@ async function kapat(sinyal: string): Promise<void> {
 process.on('SIGTERM', () => void kapat('SIGTERM'))
 process.on('SIGINT', () => void kapat('SIGINT'))
 
-console.log(`Worker başladı (${ZAMAN_DILIMI}). Sonraki çalışmalar:`, isler.map((c) => c.nextRun()?.toISOString()))
-void telafi()
+baslat().catch((e: unknown) => console.error('Worker başlatılamadı:', e))

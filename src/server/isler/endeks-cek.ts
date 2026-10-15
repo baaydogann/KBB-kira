@@ -1,9 +1,13 @@
 import type { Tarih } from '@/core/tarih'
-import { endeksCek } from '../endeks/servis'
+import { prisma } from '../db'
+import { endeksVerisiniGetir, endeksYaz } from '../endeks/servis'
 import { ortam } from '../env'
 import { hatirlatmaIsi } from './hatirlatma-uret'
 import type { IsSonucu } from './kayit'
-import { tekKopya } from './tek-kopya'
+import { BASKA_CALISMA_MESAJI, tekKopya } from './tek-kopya'
+
+/** Yazma adımı birkaç yüz satırı geçmez; tek, kısa işlem. */
+const YAZMA_ISLEMI = { timeout: 60_000, maxWait: 30_000 }
 
 /**
  * Yeni/güncellenen bekleyen endeks "onay bekliyor" hatırlatmasını hemen doğurur. EVDS verisi bu noktada yazılmış (commit edilmiş)
@@ -12,7 +16,7 @@ import { tekKopya } from './tek-kopya'
 async function hatirlatmalariTazele(bugun: Tarih): Promise<string> {
   try {
     const h = await hatirlatmaIsi(bugun)
-    return h.atlandi ? ', hatırlatma: atlandı (başka kopya çalışıyor)' : `, hatırlatma ${h.ozet}`
+    return h.atlandi ? ', hatırlatma: atlandı (başka bir çalışma sürüyor)' : `, hatırlatma ${h.ozet}`
   } catch (e) {
     console.error('[endeks-cek] hatırlatma tazeleme hatası', e)
     return `, hatırlatma: hata (${(e instanceof Error ? e.message : String(e)).slice(0, 200)})`
@@ -27,8 +31,12 @@ async function hatirlatmalariTazele(bugun: Tarih): Promise<string> {
 export async function endeksIsi(bugun: Tarih): Promise<IsSonucu> {
   const anahtar = ortam().EVDS_API_KEY.trim()
   if (!anahtar) return { ozet: 'EVDS_API_KEY tanımlı değil; endeksleri elle girin.', atlandi: true }
-  const r = await tekKopya('endeks-cek', (tx) => endeksCek(tx, bugun, { apiAnahtari: anahtar }))
-  if (!r.calisti) return { ozet: 'Başka bir kopya çalışıyor.', atlandi: true }
+  // EVDS çağrıları (en kötü ~2 dk) hiçbir veritabanı işlemi açıkken yapılmaz; yalnızca yazma + denetim satırları tek kısa işlemdedir.
+  const r = await tekKopya('endeks-cek', async () => {
+    const veri = await endeksVerisiniGetir(prisma, bugun, { apiAnahtari: anahtar })
+    return prisma.$transaction((tx) => endeksYaz(tx, veri), YAZMA_ISLEMI)
+  })
+  if (!r.calisti) return { ozet: BASKA_CALISMA_MESAJI, atlandi: true }
   const { olusturulan, guncellenen, atlanan, hatalar } = r.sonuc
   let ozet = `oluşturulan: ${olusturulan}, güncellenen: ${guncellenen}, atlanan: ${atlanan.length}, hata: ${hatalar.length}`
   if (olusturulan + guncellenen > 0) ozet += await hatirlatmalariTazele(bugun)

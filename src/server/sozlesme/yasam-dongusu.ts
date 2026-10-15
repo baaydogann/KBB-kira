@@ -236,10 +236,12 @@ interface UzamaAdayi { id: number; sozlesmeNo: string; bitis: Date | null; tasin
  * (araya giren fesih/sona erme/uzama sözleşmeyi listeden düşürür). Sözleşme başına SAVEPOINT: bir sözleşmedeki
  * CakismaHatasi ya da IsKuraliHatasi yalnızca o sözleşmenin yazılarını geri alır, KRITIK bir UZAMA_HATA hatırlatması yazılır
  * ve toplu işlem sonraki sözleşmeyle devam eder; atlanan sözleşme ertesi çalışmada yine adaydır. Dönüş: uzatılan sözleşme sayısı.
+ *
+ * `sozlesmeId` verilirse yalnızca o sözleşme aday olur (gece işi her sözleşmeyi kendi kısa işleminde çalıştırır); verilmezse davranış aynıdır.
  */
-export async function otomatikUzat(tx: Tx, bugun: Tarih, baglam: IslemBaglami = SISTEM_BAGLAMI): Promise<number> {
+export async function otomatikUzat(tx: Tx, bugun: Tarih, baglam: IslemBaglami = SISTEM_BAGLAMI, sozlesmeId?: number): Promise<number> {
   const adaylar: UzamaAdayi[] = await tx.sozlesme.findMany({
-    where: { durum: { in: ['AKTIF', 'UZADI'] }, bitis: { lt: dbTarih(bugun) } },
+    where: { durum: { in: ['AKTIF', 'UZADI'] }, bitis: { lt: dbTarih(bugun) }, ...(sozlesmeId === undefined ? {} : { id: sozlesmeId }) },
     select: { id: true, sozlesmeNo: true, bitis: true, tasinmaz: { select: { tur: true, kisaAd: true } } },
     orderBy: { id: 'asc' },
   })

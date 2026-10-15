@@ -3,8 +3,9 @@ import { endeksIsi } from './endeks-cek'
 import { hatirlatmaIsi } from './hatirlatma-uret'
 import type { IsSonucu } from './kayit'
 import { takvimIsi } from './takvim-guncelle'
+import type { IsAdi } from './zamanlama'
 
-export type IsAdi = 'takvim-guncelle' | 'hatirlatma-uret' | 'endeks-cek'
+export type { IsAdi }
 
 export const ISLER: Record<IsAdi, (bugun: Tarih) => Promise<IsSonucu>> = {
   'takvim-guncelle': takvimIsi,

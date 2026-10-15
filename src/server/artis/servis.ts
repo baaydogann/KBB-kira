@@ -156,7 +156,8 @@ export interface ArtisHesapSonucu {
  *
  * Toplu çağrıda (`sozlesmeId` yok) sözleşme başına SAVEPOINT vardır: bir sözleşmedeki CakismaHatasi ya da IsKuraliHatasi yalnızca
  * o sözleşmenin yazılarını geri alır, `hatalar`a yazılır ve sonraki sözleşmeyle devam edilir (atlanan sözleşme ertesi çalışmada yine aday olur).
- * Tek sözleşme çağrısında hata çağırana yükselir. Adaylar kimliğe göre azalan sırayla kilitlenir: yenileme etkinleştirmesi önce
+ * Tek sözleşme çağrısında da aynı savepoint ve (iş kuralı hatasında) aynı hata hatırlatması vardır, ardından hata çağırana yükselir: çağıran
+ * hatayı işlem içinde yakalarsa işlem hatırlatmayla birlikte tamamlanır, yakalamazsa işlem geri alınır. Adaylar kimliğe göre azalan sırayla kilitlenir: yenileme etkinleştirmesi önce
  * yeni (büyük kimlik), sonra eski sözleşmeyi kilitler (yeni → eski); aynı sırayı izlemeyen toplu iş onunla karşılıklı beklerdi.
  */
 export async function artislariHesapla(tx: Tx, bugun: Tarih, sozlesmeId?: number, baglam: IslemBaglami = SISTEM_BAGLAMI): Promise<ArtisHesapSonucu> {
@@ -176,10 +177,6 @@ export async function artislariHesapla(tx: Tx, bugun: Tarih, sozlesmeId?: number
   }
   for (const aday of adaylar) {
     const izleyici: { donem: Tarih | null } = { donem: null }
-    if (sozlesmeId !== undefined) {
-      say(await sozlesmeArtisiniHesapla(tx, aday.id, ortam, izleyici))
-      continue
-    }
     await tx.$executeRaw`SAVEPOINT artis_hesabi`
     try {
       say(await sozlesmeArtisiniHesapla(tx, aday.id, ortam, izleyici))
@@ -190,6 +187,9 @@ export async function artislariHesapla(tx: Tx, bugun: Tarih, sozlesmeId?: number
       await tx.$executeRaw`RELEASE SAVEPOINT artis_hesabi`
       // Çakışma geçicidir (ertesi çalışmada yeniden denenir, sessiz); iş kuralı hatası kullanıcı müdahalesi ister ve kalıcı olarak görünür kalmalıdır.
       if (e instanceof IsKuraliHatasi) await artisHesapHatasiniBildir(tx, aday, izleyici.donem, e.message, bugun)
+      // Tek sözleşme çağrısında hata çağırana yükselir (kullanıcı eylemleri işlemi geri alıp iletiyi gösterir; geri alınan işlemle hatırlatma da gider).
+      // Gece işi hatayı işlem içinde yakalayıp işlemi tamamlar: hatırlatma kalıcı olur.
+      if (sozlesmeId !== undefined) throw e
       hatalar.push(e instanceof IsKuraliHatasi && e.message.startsWith(aday.sozlesmeNo) ? e.message : `${aday.sozlesmeNo}: ${e.message}`)
     }
   }

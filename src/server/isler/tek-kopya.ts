@@ -1,23 +1,28 @@
-import { prisma, type Tx } from '../db'
+import { prisma } from '../db'
 
 /**
- * Tüm sözleşmeleri dolaşan toplu işler için etkileşimli transaction süresi (Prisma'nın 5 sn'lik varsayılanı gece işini keserdi).
- * `maxWait`: havuzdan bağlantı alma süresi.
+ * Kilit tutan işlem: yalnızca danışma kilidini alır ve iş bitene dek açık kalır (satır kilidi, yazma yok). Süre dolarsa Prisma işlemi
+ * sonlandırır ve kilit düşer, bu yüzden en kötü iş süresinden uzundur (gece işi dakikalar sürer). `maxWait`: havuzdan bağlantı alma süresi.
  */
-const TOPLU_ISLEM = { timeout: 10 * 60_000, maxWait: 30_000 }
+const KILIT_ISLEMI = { timeout: 60 * 60_000, maxWait: 30_000 }
+
+/** Kilit alınamadığında (aynı iş başka bir süreçte/kopyada çalışıyor) iş kaydına ve ekrana yazılan neden. */
+export const BASKA_CALISMA_MESAJI = 'Başka bir çalışma sürüyor; daha sonra tekrar deneyin.'
 
 /**
- * Transaction kapsamlı danışma kilidi: kilit ve işin tüm sorguları aynı transaction'da (aynı bağlantıda) çalışır; commit/rollback
- * ile kendiliğinden bırakılır. Oturum kapsamlı kilit kullanılmaz: Prisma havuzunda alma/bırakma farklı bağlantıya düşebilir ve
- * kilit ya hiç korumaz ya da sahipsiz kalır. `fn` yalnızca kendisine verilen `tx` ile çalışmalıdır; global `prisma` ile yapılan
- * işler başka bağlantıya düşer ve kilidin koruması dışında kalır.
+ * Transaction kapsamlı danışma kilidi (`pg_try_advisory_xact_lock`) tutan işlem açar ve `fn`'i onun açık olduğu sürece çalıştırır.
+ * Kilit bu işlemin bağlantısına aittir ve commit/rollback ile (süreç ölse bile bağlantı düşünce) kendiliğinden bırakılır;
+ * oturum kapsamlı kilit kullanılmaz çünkü Prisma havuzunda alma/bırakma farklı bağlantıya düşebilir.
  *
- * Kilit alınamazsa (başka bir kopya aynı işi çalıştırıyor) `fn` hiç çalışmaz.
+ * `fn` kilit işlemini kullanmaz: işini kendi kısa işlemleriyle (global `prisma`, sözleşme başına bir işlem) yapar, böylece
+ * tek uzun işlem tüm sözleşme satır kilitlerini tutmaz. Kilit tutan işlem hiçbir satırı kilitlemez ve yazmaz.
+ *
+ * Kilit alınamazsa `fn` hiç çalışmaz ve hemen `{ calisti: false }` döner; `fn` hata atarsa hata yayılır ve kilit bırakılır.
  */
-export async function tekKopya<T>(isAdi: string, fn: (tx: Tx) => Promise<T>): Promise<{ calisti: true; sonuc: T } | { calisti: false }> {
-  return prisma.$transaction(async (tx) => {
-    const [r] = await tx.$queryRaw<{ alindi: boolean }[]>`SELECT pg_try_advisory_xact_lock(hashtext(${isAdi})) AS alindi`
+export async function tekKopya<T>(isAdi: string, fn: () => Promise<T>): Promise<{ calisti: true; sonuc: T } | { calisti: false }> {
+  return prisma.$transaction(async (kilit) => {
+    const [r] = await kilit.$queryRaw<{ alindi: boolean }[]>`SELECT pg_try_advisory_xact_lock(hashtext(${isAdi})) AS alindi`
     if (!r?.alindi) return { calisti: false as const }
-    return { calisti: true as const, sonuc: await fn(tx) }
-  }, TOPLU_ISLEM)
+    return { calisti: true as const, sonuc: await fn() }
+  }, KILIT_ISLEMI)
 }

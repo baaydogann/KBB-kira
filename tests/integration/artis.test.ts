@@ -267,6 +267,30 @@ describe('toplu hesap: sözleşme başına yalıtım ve sessiz yeniden çalışm
     expect(h[0]?.aciklama).toBe(sonuc.hatalar?.[0])
   })
 
+  it('tek sözleşme çağrısı da iş kuralı hatasında ARTIS_HESAP_HATA yazar ve hatayı yükseltir; işlem içinde yakalanırsa hatırlatma kalıcı olur', async () => {
+    const bozuk = await sozlesme({ sozlesmeNo: 'BOZUK-3' })
+    await tufe12Gir(10, '31.20')
+    await prisma.kiraDonemi.updateMany({ where: { sozlesmeId: bozuk }, data: { bitis: new Date('2026-06-30') } })
+
+    // Çağıran yakalamazsa işlem geri alınır: yarım yazı ve hatırlatma kalmaz (kullanıcı eylemleri iletiyi gösterir).
+    await expect(prisma.$transaction((tx) => artislariHesapla(tx, BUGUN, bozuk))).rejects.toMatchObject({ kod: 'DONEM' })
+    expect(await prisma.hatirlatma.count({ where: { kural: 'ARTIS_HESAP_HATA' } })).toBe(0)
+
+    // Gece işi hatayı işlem içinde yakalar: savepoint yarım yazıyı geri almıştır, hatırlatma işlemle birlikte kalıcı olur.
+    const yakalanan = await prisma.$transaction(async (tx) => {
+      try {
+        await artislariHesapla(tx, BUGUN, bozuk)
+        return null
+      } catch (e) {
+        return e
+      }
+    })
+    expect(yakalanan).toMatchObject({ name: 'IsKuraliHatasi', kod: 'DONEM' })
+    const h = await prisma.hatirlatma.findMany({ where: { kural: 'ARTIS_HESAP_HATA' } })
+    expect(h.map((x) => [x.anahtar, x.sozlesmeId, x.oncelik, x.kararGerekli])).toEqual([[`ARTIS_HESAP_HATA:sozlesme:${bozuk}:2026-11-01`, bozuk, 'KRITIK', true]])
+    expect(await prisma.artisHesabi.count({ where: { sozlesmeId: bozuk } })).toBe(0)
+  })
+
   it('hata hatırlatması yeniden çalışmada tekrarlanmaz; yalnızca iletisi güncellenir (kapatılmış kayıt açılmaz)', async () => {
     const bozuk = await sozlesme({ sozlesmeNo: 'BOZUK-2' })
     await prisma.kiraDonemi.updateMany({ where: { sozlesmeId: bozuk }, data: { bitis: new Date('2026-06-30') } })

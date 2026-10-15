@@ -291,6 +291,19 @@ describe('otomatik uzama (TBK 347)', () => {
     expect(await prisma.hatirlatma.count({ where: { kural: 'UZAMA_BILGI' } })).toBe(2)
   })
 
+  it('sozlesmeId verilirse yalnızca o sözleşme aday olur; verilmezse hepsi uzar', async () => {
+    const a = await aktif({ baslangic: '2025-10-01', bitis: '2026-09-30' }, t('2025-10-01'))
+    const b = await aktif({ baslangic: '2025-10-01', bitis: '2026-09-30' }, t('2025-10-01'))
+    const durum = async (id: number) => (await prisma.sozlesme.findUniqueOrThrow({ where: { id } })).durum
+    expect(await prisma.$transaction((tx) => otomatikUzat(tx, t('2026-10-15'), TEST_BAGLAMI, b))).toBe(1)
+    expect([await durum(a), await durum(b)]).toEqual(['AKTIF', 'UZADI'])
+    // Aday olmayan (bitişi geçmemiş ya da zaten uzamış) sözleşme için filtre 0 döner.
+    expect(await prisma.$transaction((tx) => otomatikUzat(tx, t('2026-10-15'), TEST_BAGLAMI, b))).toBe(0)
+    expect(await prisma.$transaction((tx) => otomatikUzat(tx, t('2026-10-15'), TEST_BAGLAMI, 999_999))).toBe(0)
+    expect(await prisma.$transaction((tx) => otomatikUzat(tx, t('2026-10-15')))).toBe(1)
+    expect([await durum(a), await durum(b)]).toEqual(['UZADI', 'UZADI'])
+  })
+
   it('uzatılamayan sözleşme (IsKuraliHatasi) geri alınır, KRITIK hatırlatma yazılır; diğer sözleşmeler uzar', async () => {
     const iyi1 = await aktif({ baslangic: '2025-10-01', bitis: '2026-09-30' }, t('2025-10-01'))
     const zehirli = await aktif({ baslangic: '2025-10-01', bitis: '2026-09-30' }, t('2025-10-01'))

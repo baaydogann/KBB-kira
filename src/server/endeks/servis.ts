@@ -80,14 +80,21 @@ async function oranKaydet(db: Tx, baglam: IslemBaglami, seri: OranSerisi, hedef:
   await denetimKaydi(db, baglam, { varlik: 'endeks', varlikId: yeni.id, eylem: 'EVDS_CEK', sonra })
 }
 
+/** Çekme adımının ürünü: yazılacak oranlar ve (sırası korunarak) atlanan notlar. Düz veridir; veritabanı satırı ya da anahtar taşımaz. */
+type EndeksKalemi =
+  | { tur: 'atlanan'; mesaj: string }
+  | { tur: 'oran'; seri: OranSerisi; hedef: Ay; deger: Para; seriKodu: string; ham: unknown }
+
+export interface EndeksVerisi { kalemler: EndeksKalemi[]; hatalar: string[] }
+
 /**
- * Bir önceki ve iki önceki ayın oranlarını EVDS'ten hesaplar; onaylı kayıtlara dokunmaz.
+ * 1. adım: bir önceki ve iki önceki ayın oranlarını EVDS'ten çekip hesaplar. Hiçbir şey yazmaz; açık bir işlem gerektirmez
+ * (seri kodu parametreleri `db` ile okunur, uzun HTTP çağrıları sırasında işlem tutulmaz).
  * Seri kodu hedef aya göre seçilir (baz yılları karıştırılmaz): 24 aylık pencerenin tamamı tek seriden gelir.
- * EVDS/parametre sorunları toplu işi durdurmaz; `hatalar`a (erişim, biçim, eksik parametre) ya da `atlanan`a (eksik/makul olmayan veri) yazılır.
- * Yazılan her kayıt `EVDS_CEK` / `EVDS_GUNCELLE` denetim satırı bırakır (varsayılan bağlam: sistem).
+ * EVDS/parametre sorunları toplu işi durdurmaz; `hatalar`a (erişim, biçim, eksik parametre) ya da `atlanan` notuna (eksik veri) yazılır.
  */
-export async function endeksCek(db: Tx, bugun: Tarih, s: EvdsSecenekleri, baglam: IslemBaglami = SISTEM_BAGLAMI): Promise<EndeksCekSonucu> {
-  const sonuc: EndeksCekSonucu = { olusturulan: 0, guncellenen: 0, atlanan: [], hatalar: [] }
+export async function endeksVerisiniGetir(db: Tx, bugun: Tarih, s: EvdsSecenekleri): Promise<EndeksVerisi> {
+  const veri: EndeksVerisi = { kalemler: [], hatalar: [] }
   const hedefler = [ayKaydir(tarihinAyi(bugun), -2), ayKaydir(tarihinAyi(bugun), -1)]
   for (const sr of SERILER) {
     for (const hedef of hedefler) {
@@ -98,7 +105,7 @@ export async function endeksCek(db: Tx, bugun: Tarih, s: EvdsSecenekleri, baglam
         tablo = await evdsSerisiGetir(seriKodu, ayKaydir(hedef, -23), hedef, s)
       } catch (e) {
         if (e instanceof EvdsHatasi || e instanceof ParametreYokHatasi) {
-          sonuc.hatalar.push(`${sr.parametre} ${ayAnahtari(hedef)}: ${e.message}`)
+          veri.hatalar.push(`${sr.parametre} ${ayAnahtari(hedef)}: ${e.message}`)
           continue
         }
         throw e
@@ -107,14 +114,33 @@ export async function endeksCek(db: Tx, bugun: Tarih, s: EvdsSecenekleri, baglam
       for (const [seri, hesap] of [[sr.ortalama, onIkiAyOrtalamaDegisim], [sr.yillik, yillikDegisim]] as const) {
         const r = hesap(tablo, hedef)
         if (!r.ok) {
-          sonuc.atlanan.push(`${seri} ${ayAnahtari(hedef)}: ${r.hata.mesaj}`)
+          veri.kalemler.push({ tur: 'atlanan', mesaj: `${seri} ${ayAnahtari(hedef)}: ${r.hata.mesaj}` })
           continue
         }
-        await oranKaydet(db, baglam, seri, hedef, r.deger, seriKodu, ham, sonuc)
+        veri.kalemler.push({ tur: 'oran', seri, hedef, deger: r.deger, seriKodu, ham })
       }
     }
   }
+  return veri
+}
+
+/**
+ * 2. adım: çekilen oranları yazar; onaylı kayıtlara dokunmaz. Çağıran bunu tek, kısa bir işlemde çalıştırmalıdır
+ * (`prisma.$transaction((tx) => endeksYaz(tx, veri))`): yazılan kayıtlar ve `EVDS_CEK` / `EVDS_GUNCELLE` denetim satırları birlikte
+ * kalıcı olur ya da hiç olmaz (varsayılan bağlam: sistem).
+ */
+export async function endeksYaz(db: Tx, veri: EndeksVerisi, baglam: IslemBaglami = SISTEM_BAGLAMI): Promise<EndeksCekSonucu> {
+  const sonuc: EndeksCekSonucu = { olusturulan: 0, guncellenen: 0, atlanan: [], hatalar: [...veri.hatalar] }
+  for (const k of veri.kalemler) {
+    if (k.tur === 'atlanan') sonuc.atlanan.push(k.mesaj)
+    else await oranKaydet(db, baglam, k.seri, k.hedef, k.deger, k.seriKodu, k.ham, sonuc)
+  }
   return sonuc
+}
+
+/** Çekme + yazma, tek çağrıda (çağıranın verdiği `db` ile). Gece işi iki adımı ayrı çağırır: HTTP işlem dışında, yazma kısa işlemde. */
+export async function endeksCek(db: Tx, bugun: Tarih, s: EvdsSecenekleri, baglam: IslemBaglami = SISTEM_BAGLAMI): Promise<EndeksCekSonucu> {
+  return endeksYaz(db, await endeksVerisiniGetir(db, bugun, s), baglam)
 }
 
 /**
