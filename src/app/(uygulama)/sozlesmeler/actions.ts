@@ -8,7 +8,7 @@ import { islemBaglami, kullaniciGerekli } from '@/server/auth/gerekli'
 import type { IslemBaglami } from '@/server/baglam'
 import { IsKuraliHatasi } from '@/server/hata'
 import { sozlesmeAramaHedefi } from '@/server/sozlesme/arama'
-import { taslakKaydetVeBagla } from '@/server/sozlesme/kaydet'
+import { kayitSonrasiHataMi, taslakKaydetVeBagla } from '@/server/sozlesme/kaydet'
 import { malikGirdisiSemasi, sozlesmeGirdisiSemasi } from '@/server/sozlesme/sema'
 import { sozlesmeAktiflestir, sozlesmeOnizle, type OnizlemeCiktisi } from '@/server/sozlesme/servis'
 import { belirsizSureliyeCevir, malikleriDegistir, sozlesmeFeshet, sozlesmeSonlandir, sozlesmeYenile, taslakSil } from '@/server/sozlesme/yasam-dongusu'
@@ -17,6 +17,8 @@ import { basariDurumu, formKimligi, formMetni, formSurum, hataDurumu, type FormD
 // İstemci bileşenlerinden gelen kimlikler FormData değil argümandır; yine de güvenilmez girdidir: PostgreSQL INTEGER aralığında doğrulanır.
 const kimlikSemasi = z.number().int().min(1).max(2_147_483_647)
 const surumSemasi = z.number().int().min(0).max(2_147_483_647)
+
+const KAYIT_SONRASI_BELGE_HATASI = 'Kayıt kaydedildi ancak belge bağlanırken beklenmeyen bir hata oluştu; sayfayı yenileyin.'
 
 /**
  * `belgeHatasi` doluysa taslak KAYDEDİLDİ ama PDF bağlanamadı (iki ayrı işlem; bkz. `taslakKaydetVeBagla`).
@@ -37,7 +39,9 @@ export async function sozlesmeKaydetAction(veri: unknown, id: number | null, ver
     const g = sozlesmeGirdisiSemasi.parse(veri)
     sonuc = await taslakKaydetVeBagla(g, baglam, mevcutId ?? undefined, mevcutSurum ?? undefined, bagliBelge)
   } catch (e) {
-    return { ok: false, ...hataDurumu(e) }
+    const durum = hataDurumu(e)
+    // Taslak kaydedildikten sonra belge bağlama beklenmedik biçimde patladıysa genel "kayıt değişmedi" iletisi yanlış olurdu.
+    return { ok: false, ...(kayitSonrasiHataMi(e) ? { ...durum, hata: KAYIT_SONRASI_BELGE_HATASI } : durum) }
   }
   revalidatePath('/sozlesmeler')
   return { ok: true, ...sonuc }
