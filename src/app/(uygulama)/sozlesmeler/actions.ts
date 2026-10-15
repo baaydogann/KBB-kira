@@ -3,16 +3,19 @@
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
-import { tarihAyristir, type Tarih } from '@/core/tarih'
+import { oranAyristir, paraAyristir } from '@/core/para'
+import { bugunIstanbul, tarihAyristir, type Tarih } from '@/core/tarih'
+import { artisElleOranGir, artisOnayla, artislariHesapla, kiraBedeliDegistir } from '@/server/artis/servis'
 import { islemBaglami, kullaniciGerekli } from '@/server/auth/gerekli'
 import type { IslemBaglami } from '@/server/baglam'
+import { prisma } from '@/server/db'
 import { IsKuraliHatasi } from '@/server/hata'
 import { sozlesmeAramaHedefi } from '@/server/sozlesme/arama'
 import { kayitSonrasiHataMi, taslakKaydetVeBagla } from '@/server/sozlesme/kaydet'
 import { malikGirdisiSemasi, sozlesmeGirdisiSemasi } from '@/server/sozlesme/sema'
 import { sozlesmeAktiflestir, sozlesmeOnizle, type OnizlemeCiktisi } from '@/server/sozlesme/servis'
 import { belirsizSureliyeCevir, malikleriDegistir, sozlesmeFeshet, sozlesmeSonlandir, sozlesmeYenile, taslakSil } from '@/server/sozlesme/yasam-dongusu'
-import { basariDurumu, formKimligi, formMetni, formSurum, hataDurumu, type FormDurumu } from '@/app/_lib/form'
+import { basariDurumu, formDegerleri, formKimligi, formMetni, formSurum, hataDurumu, type FormDurumu } from '@/app/_lib/form'
 
 // İstemci bileşenlerinden gelen kimlikler FormData değil argümandır; yine de güvenilmez girdidir: PostgreSQL INTEGER aralığında doğrulanır.
 const kimlikSemasi = z.number().int().min(1).max(2_147_483_647)
@@ -173,4 +176,78 @@ export async function malikDegistirAction(veri: unknown): Promise<FormDurumu> {
   }
   yenile(id)
   return basariDurumu('Malik değişikliği kaydedildi.')
+}
+
+const alanHatasi = (f: FormData, alan: string, mesaj: string): FormDurumu =>
+  ({ hata: mesaj, alanHatalari: { [alan]: mesaj }, tamam: false, degerler: formDegerleri(f) })
+
+export async function artisOnaylaAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
+  const k = await kullaniciGerekli()
+  let sozlesmeId: number | null
+  try {
+    const { id, version } = kimlik(f)
+    // Sözleşme kimliği yalnızca önbellek tazelemek içindir; bozuksa atlanır.
+    sozlesmeId = formKimligi(f, 'sozlesmeId')
+    await artisOnayla(id, version, await islemBaglami(k))
+  } catch (e) {
+    return hataDurumu(e, f)
+  }
+  if (sozlesmeId !== null) yenile(sozlesmeId)
+  return basariDurumu('Artış onaylandı; yeni kira dönemi açıldı ve planlı taksitler yeniden hesaplandı.')
+}
+
+export async function artisElleOranAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
+  const k = await kullaniciGerekli()
+  const oran = oranAyristir(formMetni(f, 'oran'))
+  if (!oran.ok) return alanHatasi(f, 'oran', oran.hata.mesaj)
+  let sozlesmeId: number | null
+  try {
+    const { id, version } = kimlik(f)
+    sozlesmeId = formKimligi(f, 'sozlesmeId')
+    await artisElleOranGir(id, version, { oran: oran.deger, gerekce: formMetni(f, 'gerekce') }, await islemBaglami(k))
+  } catch (e) {
+    return hataDurumu(e, f)
+  }
+  if (sozlesmeId !== null) yenile(sozlesmeId)
+  return basariDurumu('Oran kaydedildi ve artış hesaplandı.')
+}
+
+export async function artislariSimdiHesaplaAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
+  const k = await kullaniciGerekli()
+  const id = formKimligi(f, 'id')
+  if (id === null) return { hata: 'Sözleşme seçilmedi.', alanHatalari: {}, tamam: false, degerler: formDegerleri(f) }
+  let r: Awaited<ReturnType<typeof artislariHesapla>>
+  try {
+    const baglam = await islemBaglami(k)
+    r = await prisma.$transaction((tx) => artislariHesapla(tx, bugunIstanbul(), id, baglam), { timeout: 60_000 })
+  } catch (e) {
+    return hataDurumu(e, f)
+  }
+  yenile(id)
+  return basariDurumu(r.hesaplanan + r.bekleyen === 0
+    ? 'Hesaplanacak artış yok (sıradaki artış tarihi ufuk dışında veya onay bekliyor).'
+    : `Hesaplandı: ${r.hesaplanan}, endeks bekleyen: ${r.bekleyen}.`)
+}
+
+const BEDEL_KAYNAKLARI = ['TESPIT', 'ANLASMA', 'ELLE'] as const
+const bedelKaynagiMi = (x: string): x is (typeof BEDEL_KAYNAKLARI)[number] => (BEDEL_KAYNAKLARI as readonly string[]).includes(x)
+
+export async function kiraBedeliDegistirAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
+  const k = await kullaniciGerekli()
+  const tarih = tarihAyristir(formMetni(f, 'baslangic'))
+  if (!tarih.ok) return alanHatasi(f, 'baslangic', tarih.hata.mesaj)
+  const bedel = paraAyristir(formMetni(f, 'bedel'))
+  if (!bedel.ok) return alanHatasi(f, 'bedel', bedel.hata.mesaj)
+  const kaynak = formMetni(f, 'kaynak')
+  if (!bedelKaynagiMi(kaynak)) return alanHatasi(f, 'kaynak', 'Geçerli bir kaynak seçin.')
+  let sozlesmeId: number
+  try {
+    const { id, version } = kimlik(f)
+    sozlesmeId = id
+    await kiraBedeliDegistir(id, version, { baslangic: tarih.deger, bedel: bedel.deger, kaynak, aciklama: formMetni(f, 'aciklama') }, await islemBaglami(k))
+  } catch (e) {
+    return hataDurumu(e, f)
+  }
+  yenile(sozlesmeId)
+  return basariDurumu('Kira bedeli değişikliği kaydedildi.')
 }

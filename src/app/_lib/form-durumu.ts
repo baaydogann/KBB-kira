@@ -3,6 +3,8 @@ export interface FormDurumu {
   alanHatalari: Record<string, string>
   tamam: boolean
   mesaj?: string
+  /** İşlem başarılı olsa da kullanıcının bilmesi gereken yan sonuç (ör. onay kaydedildi ama bağlı hesap yapılamadı). */
+  uyari?: string
   /** Gönderilen alan değerleri (şifre türü alanlar hariç); React 19 formu sıfırladığı için girdiler defaultValue ile geri yüklenir. */
   degerler?: Record<string, string>
 }

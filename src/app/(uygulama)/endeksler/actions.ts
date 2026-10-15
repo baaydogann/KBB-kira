@@ -2,7 +2,11 @@
 
 import { revalidatePath } from 'next/cache'
 import { oranAyristir, para } from '@/core/para'
+import { bugunIstanbul } from '@/core/tarih'
+import { artislariHesapla } from '@/server/artis/servis'
 import { islemBaglami, kullaniciGerekli } from '@/server/auth/gerekli'
+import type { IslemBaglami } from '@/server/baglam'
+import { prisma } from '@/server/db'
 import { endeksElleGir, endeksOnayla, oranSerisiMi } from '@/server/endeks/servis'
 import { basariDurumu, formDegerleri, formKimligi, formMetni, hataDurumu, type FormDurumu } from '@/app/_lib/form'
 
@@ -10,6 +14,20 @@ const DUZ_ONDALIK = /^-?\d+(\.\d+)?$/
 
 const alanHatasi = (f: FormData, alan: string, mesaj: string): FormDurumu =>
   ({ hata: mesaj, alanHatalari: { [alan]: mesaj }, tamam: false, degerler: formDegerleri(f) })
+
+/**
+ * Spec §8: onaylı bir endeks değeri girince o aya bağlı BEKLEMEDE artışlar hesaplanır. Onay kendi işleminde kalıcı olmuştur;
+ * burada ayrı bir işlemde çalışır ve başarısızlığı onayı geri almaz, kullanıcıya uyarı olarak döner (günlük iş aynı hesabı yineler).
+ */
+async function bekleyenArtislariHesapla(baglam: IslemBaglami): Promise<string | undefined> {
+  try {
+    const r = await prisma.$transaction((tx) => artislariHesapla(tx, bugunIstanbul(), undefined, baglam), { timeout: 120_000 })
+    return r.hatalar?.length ? `Bekleyen artışlar hesaplanırken bazı sözleşmeler atlandı: ${r.hatalar.join(' ')}` : undefined
+  } catch (e) {
+    const ileti = hataDurumu(e).hata ?? 'Beklenmeyen bir hata oluştu.'
+    return `Endeks kaydedildi ancak bekleyen artışlar hesaplanamadı: ${ileti} Sözleşmenin "Kira dönemleri ve artışlar" sekmesinden "Şimdi hesapla" ile yeniden deneyin.`
+  }
+}
 
 export async function endeksOnaylaAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
   const k = await kullaniciGerekli()
@@ -23,13 +41,16 @@ export async function endeksOnaylaAction(_: FormDurumu, f: FormData): Promise<Fo
   if (!DUZ_ONDALIK.test(gorulen)) {
     return { hata: 'Form verisi eksik veya geçersiz. Sayfayı yenileyin ve değeri bültenle tekrar karşılaştırın.', alanHatalari: {}, tamam: false, degerler: formDegerleri(f) }
   }
+  let baglam: IslemBaglami
   try {
-    await endeksOnayla(id, resmi && resmi.ok ? resmi.deger : null, await islemBaglami(k), para(gorulen))
+    baglam = await islemBaglami(k)
+    await endeksOnayla(id, resmi && resmi.ok ? resmi.deger : null, baglam, para(gorulen))
   } catch (e) {
     return hataDurumu(e, f)
   }
+  const uyari = await bekleyenArtislariHesapla(baglam)
   revalidatePath('/endeksler')
-  return basariDurumu('Endeks onaylandı.')
+  return { ...basariDurumu('Endeks onaylandı.'), ...(uyari === undefined ? {} : { uyari }) }
 }
 
 export async function endeksElleGirAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
@@ -40,11 +61,14 @@ export async function endeksElleGirAction(_: FormDurumu, f: FormData): Promise<F
   if (!ay) return alanHatasi(f, 'ay', 'Ayı yyyy-aa biçiminde seçin (ör. 2026-09).')
   const deger = oranAyristir(formMetni(f, 'deger'))
   if (!deger.ok) return alanHatasi(f, 'deger', deger.hata.mesaj)
+  let baglam: IslemBaglami
   try {
-    await endeksElleGir({ seri, ay: { yil: Number(ay[1]), ay: Number(ay[2]) }, deger: deger.deger }, await islemBaglami(k))
+    baglam = await islemBaglami(k)
+    await endeksElleGir({ seri, ay: { yil: Number(ay[1]), ay: Number(ay[2]) }, deger: deger.deger }, baglam)
   } catch (e) {
     return hataDurumu(e, f)
   }
+  const uyari = await bekleyenArtislariHesapla(baglam)
   revalidatePath('/endeksler')
-  return basariDurumu('Değer onaylı olarak kaydedildi.')
+  return { ...basariDurumu('Değer onaylı olarak kaydedildi.'), ...(uyari === undefined ? {} : { uyari }) }
 }
