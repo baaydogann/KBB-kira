@@ -80,6 +80,9 @@ export function yolKimligi(deger: string): number | null {
   return Number.isSafeInteger(n) && n >= 1 && n <= 2_147_483_647 ? n : null
 }
 
+/** Form alanındaki kayıt kimliği (`yolKimligi` kuralları); yok, boş veya bozuksa null. */
+export const formKimligi = (f: FormData, ad: string): number | null => yolKimligi(formMetni(f, ad))
+
 export function formSecim(f: FormData, ad: string): boolean {
   return f.get(ad) === 'on' || f.get(ad) === 'true'
 }

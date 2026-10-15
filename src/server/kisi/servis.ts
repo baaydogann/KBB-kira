@@ -1,4 +1,6 @@
 import { ibanGecerliMi, ibanNormalize, maskele } from '@/core/dogrulama'
+import type { VergiStatusu } from '@/core/tipler'
+import { Prisma } from '@/generated/prisma'
 import type { IslemBaglami } from '../baglam'
 import { prisma } from '../db'
 import { denetimKaydi } from '../denetim'
@@ -13,17 +15,26 @@ export function kisiGorunenAd(k: { tip: 'GERCEK' | 'TUZEL'; ad: string | null; s
 const KISI_ALANLARI = ['tip', 'tckn', 'vkn', 'ad', 'soyad', 'unvan', 'vergiDairesi', 'vergiStatusu', 'telefon', 'adres'] as const
 
 /**
- * Denetim satırı özeti (KVKK, spec §16): TCKN/VKN maskeli, sınıflandırma alanları açık; ad, unvan, telefon ve adres
- * değerleri satıra hiç yazılmaz. Kişi `varlikId` ile bulunur, ne değiştiği `degisenAlanlar`dan okunur.
+ * Denetim satırı özeti (KVKK, spec §16): TCKN/VKN maskeli; ad, soyad, telefon ve adres değerleri satıra hiç yazılmaz.
+ * Unvan ve vergi dairesi tüzel kişi/kurum bilgisidir, açık yazılır. Kişi `varlikId` ile bulunur, gerçek kişi
+ * alanlarında ne değiştiği `degisenAlanlar`dan okunur.
  */
-function denetimOzeti(k: { tip: string; tckn: string | null; vkn: string | null; vergiStatusu: string; statuTeyitli: boolean }) {
+function denetimOzeti(k: { tip: string; tckn: string | null; vkn: string | null; unvan: string | null; vergiDairesi: string | null; vergiStatusu: string; statuTeyitli: boolean }) {
   return {
     tip: k.tip,
     vergiStatusu: k.vergiStatusu,
     statuTeyitli: k.statuTeyitli,
     tckn: k.tckn === null ? null : maskele(k.tckn),
     vkn: k.vkn === null ? null : maskele(k.vkn),
+    unvan: k.unvan,
+    vergiDairesi: k.vergiDairesi,
   }
+}
+
+/** P2002'nin hangi benzersiz alandan geldiği (`meta.target`: sütun listesi veya kısıt adı); bilinmiyorsa tckn. */
+function ihlalAlani(e: unknown): 'tckn' | 'vkn' {
+  const hedef = e instanceof Prisma.PrismaClientKnownRequestError ? e.meta?.target : undefined
+  return String(hedef ?? '').includes('vkn') ? 'vkn' : 'tckn'
 }
 
 export async function kisiKaydet(g: KisiGirdisi, baglam: IslemBaglami, id?: number, version?: number): Promise<number> {
@@ -54,7 +65,10 @@ export async function kisiKaydet(g: KisiGirdisi, baglam: IslemBaglami, id?: numb
       return id
     })
   } catch (e) {
-    if (benzersizIhlaliMi(e)) throw new IsKuraliHatasi('KIMLIK', 'Bu kimlik/vergi numarasıyla kayıtlı bir kişi zaten var.', 'tckn')
+    if (benzersizIhlaliMi(e)) {
+      const alan = ihlalAlani(e)
+      throw new IsKuraliHatasi('KIMLIK', alan === 'vkn' ? 'Bu vergi kimlik numarasıyla kayıtlı bir kişi zaten var.' : 'Bu T.C. kimlik numarasıyla kayıtlı bir kişi zaten var.', alan)
+    }
     throw e
   }
 }
@@ -71,6 +85,12 @@ export async function kisiListesi(arama?: string) {
     orderBy: [{ soyad: 'asc' }, { unvan: 'asc' }],
     take: 200,
   })
+}
+
+/** Tam eşleşmeyle TCKN/VKN'den kişi kimliği; arama kutusu kimlik numarasını URL'e yazmadan bu yolla bulur. */
+export async function kisiKimlikIleBul(kimlik: string): Promise<number | null> {
+  const k = await prisma.kisi.findFirst({ where: { OR: [{ tckn: kimlik }, { vkn: kimlik }] }, select: { id: true } })
+  return k?.id ?? null
 }
 
 export async function kisiDetayi(id: number) {
@@ -92,7 +112,7 @@ export async function ibanEkle(kisiId: number, g: { iban: string; bankaAdi: stri
     return await prisma.$transaction(async (tx) => {
       if (!(await tx.kisi.findUnique({ where: { id: kisiId }, select: { id: true } }))) throw new BulunamadiHatasi('Kişi bulunamadı.')
       const i = await tx.iban.create({ data: { kisiId, iban, bankaAdi: g.bankaAdi } })
-      await denetimKaydi(tx, baglam, { varlik: 'iban', varlikId: i.id, eylem: 'OLUSTUR', sonra: { kisiId, bankaAdi: g.bankaAdi } })
+      await denetimKaydi(tx, baglam, { varlik: 'iban', varlikId: i.id, eylem: 'OLUSTUR', sonra: { kisiId, bankaAdi: g.bankaAdi, iban: maskele(iban) } })
       return i.id
     })
   } catch (e) {
@@ -103,16 +123,34 @@ export async function ibanEkle(kisiId: number, g: { iban: string; bankaAdi: stri
 
 export async function ibanAktiflik(ibanId: number, aktif: boolean, baglam: IslemBaglami): Promise<void> {
   await prisma.$transaction(async (tx) => {
-    if (!(await tx.iban.findUnique({ where: { id: ibanId }, select: { id: true } }))) throw new BulunamadiHatasi('IBAN bulunamadı.')
+    const once = await tx.iban.findUnique({ where: { id: ibanId } })
+    if (!once) throw new BulunamadiHatasi('IBAN bulunamadı.')
     await tx.iban.update({ where: { id: ibanId }, data: { aktif } })
-    await denetimKaydi(tx, baglam, { varlik: 'iban', varlikId: ibanId, eylem: aktif ? 'AKTIFLESTIR' : 'PASIFLESTIR' })
+    const iban = maskele(once.iban)
+    await denetimKaydi(tx, baglam, {
+      varlik: 'iban', varlikId: ibanId, eylem: aktif ? 'AKTIFLESTIR' : 'PASIFLESTIR',
+      once: { kisiId: once.kisiId, iban, aktif: once.aktif }, sonra: { kisiId: once.kisiId, iban, aktif },
+    })
   })
 }
 
-export async function statuTeyitEt(kisiId: number, teyitli: boolean, baglam: IslemBaglami): Promise<void> {
+/**
+ * Mali müşavir teyidi, ekranda görülen sürüm ve statü üzerine verilir: kayıt arada değiştiyse (başka bir düzenleme,
+ * statü değişimi) reddedilir; teyit görülmemiş bir statüye uygulanmaz.
+ */
+export async function statuTeyitEt(kisiId: number, teyitli: boolean, beklenen: { version: number; vergiStatusu: VergiStatusu }, baglam: IslemBaglami): Promise<void> {
   await prisma.$transaction(async (tx) => {
-    if (!(await tx.kisi.findUnique({ where: { id: kisiId }, select: { id: true } }))) throw new BulunamadiHatasi('Kişi bulunamadı.')
-    await tx.kisi.update({ where: { id: kisiId }, data: { statuTeyitli: teyitli, version: { increment: 1 } } })
-    await denetimKaydi(tx, baglam, { varlik: 'kisi', varlikId: kisiId, eylem: teyitli ? 'STATU_TEYIT' : 'STATU_TEYIT_GERI_AL' })
+    const r = await tx.kisi.updateMany({
+      where: { id: kisiId, version: beklenen.version, vergiStatusu: beklenen.vergiStatusu },
+      data: { statuTeyitli: teyitli, version: { increment: 1 } },
+    })
+    if (r.count === 0) {
+      if (!(await tx.kisi.findUnique({ where: { id: kisiId }, select: { id: true } }))) throw new BulunamadiHatasi('Kişi bulunamadı.')
+      throw new CakismaHatasi()
+    }
+    await denetimKaydi(tx, baglam, {
+      varlik: 'kisi', varlikId: kisiId, eylem: teyitli ? 'STATU_TEYIT' : 'STATU_TEYIT_GERI_AL',
+      sonra: { vergiStatusu: beklenen.vergiStatusu, statuTeyitli: teyitli },
+    })
   })
 }

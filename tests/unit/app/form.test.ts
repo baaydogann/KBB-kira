@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { tarih } from '@/core/tarih'
-import { formDegerleri, formMetni, formSayi, formSecim, formSurum, hataDurumu, yolKimligi } from '@/app/_lib/form'
+import { formDegerleri, formKimligi, formMetni, formSayi, formSecim, formSurum, hataDurumu, yolKimligi } from '@/app/_lib/form'
 import { BulunamadiHatasi, CakismaHatasi, IsKuraliHatasi } from '@/server/hata'
 import { ParametreYokHatasi } from '@/server/parametre/servis'
 
@@ -92,6 +92,20 @@ describe('yolKimligi', () => {
   it('sıfır, aralık dışı ve Number(x) ile sayıya dönüşen çöp girdiyi null yapar', () => {
     for (const v of ['0', '2147483648', '9'.repeat(400), '', ' ', ' 7', '7 ', '-1', '+5', '1.5', '1,5', '1e3', '0x10', 'abc', '١٢', 'Infinity', 'NaN']) {
       expect(yolKimligi(v), JSON.stringify(v)).toBeNull()
+    }
+  })
+})
+
+describe('formKimligi', () => {
+  it('alandaki kırpılmış metni yolKimligi kurallarıyla okur', () => {
+    expect(formKimligi(form({ id: ' 42 ' }), 'id')).toBe(42)
+    expect(formKimligi(form({ kisiId: '7' }), 'kisiId')).toBe(7)
+  })
+
+  it('yok, boş, sıfır, aralık dışı ve bozuk değerde null döner', () => {
+    expect(formKimligi(form({}), 'id')).toBeNull()
+    for (const v of ['', '0', '-1', '1e3', '0x10', 'abc', '2147483648']) {
+      expect(formKimligi(form({ id: v }), 'id'), JSON.stringify(v)).toBeNull()
     }
   })
 })

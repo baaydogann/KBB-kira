@@ -4,16 +4,17 @@ import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { islemBaglami, kullaniciGerekli } from '@/server/auth/gerekli'
 import { IsKuraliHatasi } from '@/server/hata'
-import { kisiSemasi } from '@/server/kisi/sema'
-import { ibanAktiflik, ibanEkle, kisiKaydet, statuTeyitEt } from '@/server/kisi/servis'
-import { basariDurumu, formMetni, formSayi, formSurum, hataDurumu, type FormDurumu } from '@/app/_lib/form'
+import { kisiAramaHedefi } from '@/server/kisi/arama'
+import { kisiSemasi, vergiStatusuSemasi } from '@/server/kisi/sema'
+import { ibanAktiflik, ibanEkle, kisiKaydet, kisiKimlikIleBul, statuTeyitEt } from '@/server/kisi/servis'
+import { basariDurumu, formKimligi, formMetni, formSurum, hataDurumu, type FormDurumu } from '@/app/_lib/form'
 
 export async function kisiKaydetAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
   const k = await kullaniciGerekli()
   let id: number
   try {
     const g = kisiSemasi.parse(Object.fromEntries(f))
-    const mevcutId = formSayi(f, 'id') ?? undefined
+    const mevcutId = formKimligi(f, 'id') ?? undefined
     // Dolu ama bozuk bir kimlik "yeni kayıt" gibi işlenmez.
     if (mevcutId === undefined && formMetni(f, 'id') !== '') throw new IsKuraliHatasi('ID', 'Kayıt kimliği geçersiz; sayfayı yenileyip tekrar deneyin.')
     id = await kisiKaydet(g, await islemBaglami(k), mevcutId, formSurum(f))
@@ -24,9 +25,18 @@ export async function kisiKaydetAction(_: FormDurumu, f: FormData): Promise<Form
   redirect(`/kisiler/${id}`)
 }
 
+/**
+ * Kişi arama kutusu (POST): TCKN/VKN adres satırına yazılmasın diye kimlik numarası aramaları burada çözülür;
+ * ad/unvan aramaları GET sorgusuna (`?q=`) yönlenir.
+ */
+export async function kisiAraAction(f: FormData): Promise<void> {
+  await kullaniciGerekli()
+  redirect(await kisiAramaHedefi(formMetni(f, 'q'), kisiKimlikIleBul))
+}
+
 export async function ibanEkleAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
   const k = await kullaniciGerekli()
-  const kisiId = formSayi(f, 'kisiId')
+  const kisiId = formKimligi(f, 'kisiId')
   if (kisiId === null) return { hata: 'Kişi seçilmedi.', alanHatalari: {}, tamam: false }
   try {
     await ibanEkle(kisiId, { iban: formMetni(f, 'iban'), bankaAdi: formMetni(f, 'bankaAdi') || null }, await islemBaglami(k))
@@ -37,19 +47,33 @@ export async function ibanEkleAction(_: FormDurumu, f: FormData): Promise<FormDu
   }
 }
 
-export async function ibanAktiflikAction(f: FormData): Promise<void> {
+export async function ibanAktiflikAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
   const k = await kullaniciGerekli()
-  const id = formSayi(f, 'ibanId')
-  const kisiId = formSayi(f, 'kisiId')
-  if (id === null || kisiId === null) return
-  await ibanAktiflik(id, f.get('aktif') === 'true', await islemBaglami(k))
-  revalidatePath(`/kisiler/${kisiId}`)
+  const id = formKimligi(f, 'ibanId')
+  const kisiId = formKimligi(f, 'kisiId')
+  if (id === null || kisiId === null) return { hata: 'IBAN seçilmedi.', alanHatalari: {}, tamam: false }
+  try {
+    await ibanAktiflik(id, f.get('aktif') === 'true', await islemBaglami(k))
+    revalidatePath(`/kisiler/${kisiId}`)
+    return basariDurumu('IBAN durumu güncellendi.')
+  } catch (e) {
+    return hataDurumu(e)
+  }
 }
 
-export async function statuTeyitAction(f: FormData): Promise<void> {
+/** Teyit, formda görülen sürüm ve statü üzerine verilir (`statuTeyitEt` arada değişen kaydı reddeder). */
+export async function statuTeyitAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
   const k = await kullaniciGerekli()
-  const id = formSayi(f, 'kisiId')
-  if (id === null) return
-  await statuTeyitEt(id, f.get('teyitli') === 'true', await islemBaglami(k))
-  revalidatePath(`/kisiler/${id}`)
+  const id = formKimligi(f, 'kisiId')
+  if (id === null) return { hata: 'Kişi seçilmedi.', alanHatalari: {}, tamam: false }
+  try {
+    const version = formSurum(f)
+    if (version === undefined) throw new IsKuraliHatasi('VERSION', 'Form sürümü eksik; sayfayı yenileyip tekrar deneyin.')
+    const vergiStatusu = vergiStatusuSemasi.parse(formMetni(f, 'vergiStatusu'))
+    await statuTeyitEt(id, f.get('teyitli') === 'true', { version, vergiStatusu }, await islemBaglami(k))
+    revalidatePath(`/kisiler/${id}`)
+    return basariDurumu('Statü teyidi güncellendi.')
+  } catch (e) {
+    return hataDurumu(e)
+  }
 }

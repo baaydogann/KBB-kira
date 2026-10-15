@@ -9,13 +9,11 @@ import { bugunIstanbul } from '@/core/tarih'
 import { yolKimligi } from '@/app/_lib/form'
 import { SayfaBasligi } from '@/components/sayfa-basligi'
 import { Kart } from '@/components/ui/kart'
-import { Dugme } from '@/components/ui/dugme'
 import { Rozet } from '@/components/ui/rozet'
 import { Uyari } from '@/components/ui/uyari'
 import { Tablo, Td, Th } from '@/components/ui/tablo'
-import { KisiFormu } from '../kisi-formu'
-import { IbanFormu } from '../iban-formu'
-import { ibanAktiflikAction, statuTeyitAction } from '../actions'
+import { KisiFormu, StatuTeyitFormu } from '../kisi-formu'
+import { IbanAktiflikFormu, IbanFormu } from '../iban-formu'
 
 export default async function KisiSayfasi({ params }: { params: Promise<{ id: string }> }) {
   await kullaniciGerekli()
@@ -36,11 +34,7 @@ export default async function KisiSayfasi({ params }: { params: Promise<{ id: st
           <Uyari ton={k.statuTeyitli ? 'basari' : 'uyari'}>
             <div className="flex items-center justify-between gap-3">
               <span>{k.statuTeyitli ? 'Vergi statüsü müşavir tarafından teyit edildi.' : 'Bu vergi statüsünde stopaj/KDV uygulaması belirsiz; mali müşavir teyidi gerekli (spec §21).'}</span>
-              <form action={statuTeyitAction}>
-                <input type="hidden" name="kisiId" value={k.id} />
-                <input type="hidden" name="teyitli" value={String(!k.statuTeyitli)} />
-                <Dugme type="submit">{k.statuTeyitli ? 'Teyidi geri al' : 'Teyit edildi olarak işaretle'}</Dugme>
-              </form>
+              <StatuTeyitFormu kisiId={k.id} version={k.version} vergiStatusu={k.vergiStatusu} teyitli={k.statuTeyitli} />
             </div>
           </Uyari>
         ) : null}
@@ -56,11 +50,7 @@ export default async function KisiSayfasi({ params }: { params: Promise<{ id: st
                     <Td>{i.bankaAdi ?? '—'}</Td>
                     <Td>{i.aktif ? <Rozet ton="yesil">Aktif</Rozet> : <Rozet>Pasif</Rozet>}</Td>
                     <Td>
-                      <form action={ibanAktiflikAction}>
-                        <input type="hidden" name="ibanId" value={i.id} /><input type="hidden" name="kisiId" value={k.id} />
-                        <input type="hidden" name="aktif" value={String(!i.aktif)} />
-                        <Dugme type="submit" tur="hayalet">{i.aktif ? 'Pasifleştir' : 'Aktifleştir'}</Dugme>
-                      </form>
+                      <IbanAktiflikFormu ibanId={i.id} kisiId={k.id} aktif={i.aktif} />
                     </Td>
                   </tr>
                 ))}

@@ -1,22 +1,27 @@
 import Link from 'next/link'
 import { maskele } from '@/core/dogrulama'
 import { kullaniciGerekli } from '@/server/auth/gerekli'
+import { kimlikAramasi } from '@/server/kisi/arama'
 import { kisiGorunenAd, kisiListesi } from '@/server/kisi/servis'
 import { SayfaBasligi } from '@/components/sayfa-basligi'
 import { DugmeLink } from '@/components/ui/dugme'
 import { Girdi } from '@/components/ui/alan'
 import { Rozet } from '@/components/ui/rozet'
 import { Tablo, Td, Th } from '@/components/ui/tablo'
+import { Uyari } from '@/components/ui/uyari'
+import { kisiAraAction } from './actions'
 
-export default async function KisilerSayfasi({ searchParams }: { searchParams: Promise<{ q?: string | string[] }> }) {
+export default async function KisilerSayfasi({ searchParams }: { searchParams: Promise<{ q?: string | string[]; bulunamadi?: string | string[] }> }) {
   await kullaniciGerekli()
-  const { q: ham } = await searchParams
-  const q = typeof ham === 'string' ? ham : undefined
+  const { q: ham, bulunamadi } = await searchParams
+  // TCKN/VKN adres satırında aranmaz (KVKK): kimlik numarası gibi bir `q` yok sayılır, arama kutusu POST eder.
+  const q = typeof ham === 'string' && kimlikAramasi(ham) === null ? ham : undefined
   const liste = await kisiListesi(q)
   return (
     <>
       <SayfaBasligi baslik="Malikler ve hak sahipleri" eylemler={<DugmeLink href="/kisiler/yeni" tur="birincil">Yeni kişi</DugmeLink>} />
-      <form className="mb-3"><Girdi name="q" type="search" defaultValue={q} aria-label="Kişi ara" placeholder="Ad, soyad, unvan, TCKN veya VKN" autoComplete="off" className="max-w-md" /></form>
+      <form action={kisiAraAction} className="mb-3"><Girdi name="q" type="search" defaultValue={q} aria-label="Kişi ara" placeholder="Ad, soyad, unvan, TCKN veya VKN" autoComplete="off" className="max-w-md" /></form>
+      {bulunamadi === '1' ? <div className="mb-3"><Uyari ton="uyari">Bu kimlik numarasıyla kayıtlı kişi bulunamadı.</Uyari></div> : null}
       <Tablo>
         <thead><tr><Th>Ad / unvan</Th><Th>Kimlik</Th><Th>Vergi statüsü</Th></tr></thead>
         <tbody className="divide-y divide-slate-100">
