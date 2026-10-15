@@ -2,15 +2,16 @@ import { formatTL, para } from './para'
 import { artisTarihleri, tespitTarihleri } from './takvim'
 import {
   ayAdi, ayAnahtari, ayEkle, ayKaydir, birlestir, enKucukTarih, formatTarih, gunEkle, gunFarki,
-  isGunuEkle, karsilastir, parcala, sonrakiIsGunu, tarihinAyi, type Ay, type Tarih,
+  isGunuEkle, isGunuMu, karsilastir, parcala, sonrakiIsGunu, tarihinAyi, type Ay, type Tarih,
 } from './tarih'
 import { tbk347KapsamindaMi, type ArtisKurali, type TasinmazTuru } from './tipler'
 
 export type Oncelik = 'KRITIK' | 'YUKSEK' | 'NORMAL'
 export type HatirlatmaKurali =
   | 'H1' | 'H2' | 'H4' | 'H4_EKSIK' | 'H5' | 'H6' | 'H6_SON_GUN' | 'H6_ARSA' | 'H7' | 'H8' | 'H11' | 'H12' | 'H13'
-export const OTOMATIK_KURALLAR: readonly string[] = [
-  'H1', 'H2', 'H4', 'H4_EKSIK', 'H5', 'H6', 'H6_SON_GUN', 'H6_ARSA', 'H7', 'H8', 'H11', 'H12', 'H13',
+/** Üretici bunları kendiliğinden kapatabilir. H13 (mevzuat parametresi) kullanıcı tamamlayana kadar açık kalır. */
+export const OTOMATIK_KURALLAR: readonly HatirlatmaKurali[] = [
+  'H1', 'H2', 'H4', 'H4_EKSIK', 'H5', 'H6', 'H6_SON_GUN', 'H6_ARSA', 'H7', 'H8', 'H11', 'H12',
 ]
 export type IliskiliTur = 'sozlesme' | 'taksit' | 'endeks' | 'parametre' | 'sistem'
 
@@ -66,9 +67,17 @@ export interface SozlesmeOzeti {
   artisPeriyoduAy: number
   eksikler: EksikVeri[]
 }
-export interface TaksitOzeti { id: string; sozlesmeId: string; vade: Tarih; tutar: string }
+export interface TaksitOzeti {
+  id: string
+  sozlesmeId: string
+  sozlesmeNo: string
+  kisaAd: string
+  vade: Tarih
+  tutar: string
+}
 export interface ArtisOzeti { sozlesmeId: string; donemBaslangic: Tarih; durum: 'BEKLEMEDE' | 'HESAPLANDI' | 'ONAYLANDI' }
 export interface EndeksOzeti { id: string; seri: string; ay: Ay }
+/** Yürürlük kaydı. Loader her anahtar için yalnızca ardılı olmayan (en son) yürürlük kaydını verir. */
 export interface ParametreBitisi { anahtar: string; yururlukBitis: Tarih }
 
 export interface HatirlatmaVerisi {
@@ -90,34 +99,31 @@ export function hatirlatmalariUret(v: HatirlatmaVerisi): HatirlatmaAdayi[] {
   const ekle: Ekle = (a) => {
     if (karsilastir(a.gorunurTarih, v.bugun) <= 0) sonuc.push(a)
   }
-  const sozlesmeler = new Map(v.sozlesmeler.map((s) => [s.id, s]))
-  odemeKurallari(v, sozlesmeler, ekle)
+  odemeKurallari(v, ekle)
   endeksKurallari(v, ekle)
   for (const s of v.sozlesmeler) sozlesmeKurallari(v, s, ekle)
   sistemKurallari(v, ekle)
   return sonuc
 }
 
-function odemeKurallari(v: HatirlatmaVerisi, sozlesmeler: Map<string, SozlesmeOzeti>, ekle: Ekle): void {
+function odemeKurallari(v: HatirlatmaVerisi, ekle: Ekle): void {
   const a = v.ayarlar
   for (const t of v.planliTaksitler) {
-    const s = sozlesmeler.get(t.sozlesmeId)
-    if (!s) continue
     const kalan = gunFarki(v.bugun, t.vade)
     const gecikmis = kalan < 0
     ekle({
-      anahtar: `H1:taksit:${t.id}:${t.vade}`, kural: 'H1', iliskiliTur: 'taksit', iliskiliId: t.id, sozlesmeId: s.id,
-      baslik: gecikmis ? `Gecikmiş kira ödemesi — ${s.no}` : `Kira ödemesi — ${s.no}`,
-      aciklama: `${s.kisaAd}: ${formatTL(para(t.tutar))}, vade ${formatTarih(t.vade)}${gecikmis ? ` (${-kalan} gün gecikti)` : ''}.`,
+      anahtar: `H1:taksit:${t.id}:${t.vade}`, kural: 'H1', iliskiliTur: 'taksit', iliskiliId: t.id, sozlesmeId: t.sozlesmeId,
+      baslik: gecikmis ? `Gecikmiş kira ödemesi — ${t.sozlesmeNo}` : `Kira ödemesi — ${t.sozlesmeNo}`,
+      aciklama: `${t.kisaAd}: ${formatTL(para(t.tutar))}, vade ${formatTarih(t.vade)}${gecikmis ? ` (${-kalan} gün gecikti)` : ''}.`,
       hedefTarih: t.vade, gorunurTarih: gunEkle(t.vade, -a.vadeGorunurGun),
       oncelik: gecikmis ? 'KRITIK' : kalan <= a.vadeYuksekGun ? 'YUKSEK' : 'NORMAL', kararGerekli: false,
     })
     if (gecikmis) continue
     const hedef = isGunuEkle(t.vade, -a.odemeEmriIsGunu, v.tatiller)
     ekle({
-      anahtar: `H2:taksit:${t.id}:${hedef}`, kural: 'H2', iliskiliTur: 'taksit', iliskiliId: t.id, sozlesmeId: s.id,
-      baslik: `Ödeme emri hazırla — ${s.no}`,
-      aciklama: `${s.kisaAd}: ${formatTarih(t.vade)} vadeli taksit için ödeme emri hazırlığı.`,
+      anahtar: `H2:taksit:${t.id}:${hedef}`, kural: 'H2', iliskiliTur: 'taksit', iliskiliId: t.id, sozlesmeId: t.sozlesmeId,
+      baslik: `Ödeme emri hazırla — ${t.sozlesmeNo}`,
+      aciklama: `${t.kisaAd}: ${formatTarih(t.vade)} vadeli taksit için ödeme emri hazırlığı.`,
       hedefTarih: hedef, gorunurTarih: hedef, oncelik: 'YUKSEK', kararGerekli: false,
     })
   }
@@ -138,16 +144,31 @@ function endeksKurallari(v: HatirlatmaVerisi, ekle: Ekle): void {
     })
   }
   const beklenen = ayKaydir(tarihinAyi(v.bugun), -1)
-  const yayin = yayinGunu(tarihinAyi(v.bugun), v.tatiller)
-  const onayli = v.sonOnayliTufe12Ayi !== null && ayAnahtari(v.sonOnayliTufe12Ayi) >= ayAnahtari(beklenen)
-  const bekliyor = v.bekleyenEndeksler.some((e) => e.seri === 'TUFE_12AY_ORT' && ayAnahtari(e.ay) === ayAnahtari(beklenen))
-  if (onayli || bekliyor) return
-  ekle({
-    anahtar: `H4_EKSIK:endeks:${ayAnahtari(beklenen)}`, kural: 'H4_EKSIK', iliskiliTur: 'endeks', iliskiliId: ayAnahtari(beklenen), sozlesmeId: null,
-    baslik: `${ayAdi(beklenen)} TÜFE12 oranı sistemde yok`,
-    aciklama: "EVDS'ten gelmedi veya onaylanmadı. TÜİK bülteninden elle girin; artış hesapları bekliyor.",
-    hedefTarih: yayin, gorunurTarih: gunEkle(yayin, 1), oncelik: 'KRITIK', kararGerekli: true,
-  })
+  const bekleyenAylar = new Set(
+    v.bekleyenEndeksler.filter((e) => e.seri === 'TUFE_12AY_ORT').map((e) => ayAnahtari(e.ay)),
+  )
+  for (const m of eksikTufeAylari(v.sonOnayliTufe12Ayi, beklenen)) {
+    if (bekleyenAylar.has(ayAnahtari(m))) continue
+    const hedef = yayinGunu(ayKaydir(m, 1), v.tatiller)
+    ekle({
+      anahtar: `H4_EKSIK:endeks:${ayAnahtari(m)}`, kural: 'H4_EKSIK', iliskiliTur: 'endeks', iliskiliId: ayAnahtari(m), sozlesmeId: null,
+      baslik: `${ayAdi(m)} TÜFE12 oranı sistemde yok`,
+      aciklama: "EVDS'ten gelmedi veya onaylanmadı. TÜİK bülteninden elle girin; artış hesapları bekliyor.",
+      hedefTarih: hedef, gorunurTarih: gunEkle(hedef, 1), oncelik: 'KRITIK', kararGerekli: true,
+    })
+  }
+}
+
+/**
+ * Son onaylı aydan beklenen aya kadar (dahil) eksik TÜFE12 ayları, en çok son 12 ay.
+ * Onaylı ay hiç yoksa yalnızca beklenen ay.
+ */
+function eksikTufeAylari(sonOnayli: Ay | null, beklenen: Ay): Ay[] {
+  if (sonOnayli === null) return [beklenen]
+  const fark = (beklenen.yil - sonOnayli.yil) * 12 + (beklenen.ay - sonOnayli.ay)
+  const aylar: Ay[] = []
+  for (let k = Math.max(1, fark - 11); k <= fark; k++) aylar.push(ayKaydir(sonOnayli, k))
+  return aylar
 }
 
 function sozlesmeKurallari(v: HatirlatmaVerisi, s: SozlesmeOzeti, ekle: Ekle): void {
@@ -157,7 +178,8 @@ function sozlesmeKurallari(v: HatirlatmaVerisi, s: SozlesmeOzeti, ekle: Ekle): v
 
   if (s.artisKurali !== 'YOK') {
     const ufuk = gunEkle(v.bugun, a.artisOnceGun)
-    const son = s.bitis === null ? ufuk : enKucukTarih(s.bitis, ufuk)
+    // Arsa kirası bitişte sona erer. TBK 347 kapsamı ve açık uçlu sözleşmelerde artış ufka kadar aranır.
+    const son = s.bitis === null || tbk ? ufuk : enKucukTarih(s.bitis, ufuk)
     for (const d of artisTarihleri({ ilkKiraBaslangici: s.ilkKiraBaslangici, periyotAy: s.artisPeriyoduAy, sonTarih: son })) {
       if (karsilastir(d, s.sonKiraDonemiBaslangici) <= 0) continue
       const kayit = v.artislar.find((x) => x.sozlesmeId === s.id && x.donemBaslangic === d)
@@ -168,7 +190,7 @@ function sozlesmeKurallari(v: HatirlatmaVerisi, s: SozlesmeOzeti, ekle: Ekle): v
         baslik: `Kira artışı ${durumMetni} — ${s.no}`,
         aciklama: `${s.kisaAd}: ${formatTarih(d)} tarihinde başlayan kira döneminin artışı.`,
         hedefTarih: d, gorunurTarih: gunEkle(d, -a.artisOnceGun),
-        oncelik: karsilastir(d, v.bugun) <= 0 ? 'KRITIK' : kayit?.durum === 'HESAPLANDI' ? 'YUKSEK' : 'NORMAL',
+        oncelik: karsilastir(d, v.bugun) <= 0 ? 'KRITIK' : 'YUKSEK',
         kararGerekli: kayit?.durum === 'HESAPLANDI',
       })
     }
@@ -189,13 +211,16 @@ function sozlesmeKurallari(v: HatirlatmaVerisi, s: SozlesmeOzeti, ekle: Ekle): v
       })
     }
     if (tbk) {
+      // Yasal son gün anahtar ve görünürlük için kullanılır; hatırlatılan tarih ise ondan önceki son iş günüdür.
       const sonGun = gunEkle(s.bitis, -a.fesihBildirimGun)
       if (karsilastir(v.bugun, sonGun) <= 0) {
+        let hedef = sonGun
+        while (!isGunuMu(hedef, v.tatiller)) hedef = gunEkle(hedef, -1)
         ekle({
           ...ortak, anahtar: `H6_SON_GUN:sozlesme:${s.id}:${sonGun}`, kural: 'H6_SON_GUN',
           baslik: `Fesih bildirimi son günü — ${s.no}`,
-          aciklama: `${formatTarih(sonGun)} tarihine kadar yazılı fesih bildirimi yapılmazsa sözleşme 1 yıl uzar (TBK 347).`,
-          hedefTarih: sonGun, gorunurTarih: gunEkle(sonGun, -a.fesihSonGunGorunurGun), oncelik: 'KRITIK', kararGerekli: true,
+          aciklama: `${formatTarih(hedef)} tarihine kadar yazılı fesih bildirimi yapılmazsa sözleşme 1 yıl uzar (TBK 347).`,
+          hedefTarih: hedef, gorunurTarih: gunEkle(hedef, -a.fesihSonGunGorunurGun), oncelik: 'KRITIK', kararGerekli: true,
         })
       }
     } else if (kalan < 0) {
@@ -218,14 +243,16 @@ function sozlesmeKurallari(v: HatirlatmaVerisi, s: SozlesmeOzeti, ekle: Ekle): v
         hedefTarih: d, gorunurTarih: ayEkle(d, -a.tespitOnceAy), oncelik: 'NORMAL', kararGerekli: false,
       })
     }
-    if (s.uzamaSayisi >= 10 && s.bitis !== null && karsilastir(v.bugun, s.bitis) <= 0) {
+    if (s.uzamaSayisi >= 10 && s.bitis !== null) {
       const hedef = ayEkle(s.bitis, -a.uzama10OnceAy)
-      ekle({
-        ...ortak, anahtar: `H8:sozlesme:${s.id}:${s.bitis}`, kural: 'H8',
-        baslik: `10 uzama yılı doldu — ${s.no}`,
-        aciklama: `Kiraya veren ${formatTarih(hedef)} tarihine kadar bildirimde bulunarak sözleşmeyi gerekçesiz feshedebilir (TBK 347/1).`,
-        hedefTarih: hedef, gorunurTarih: gunEkle(hedef, -30), oncelik: 'NORMAL', kararGerekli: false,
-      })
+      if (karsilastir(v.bugun, hedef) <= 0) {
+        ekle({
+          ...ortak, anahtar: `H8:sozlesme:${s.id}:${s.bitis}`, kural: 'H8',
+          baslik: `10 uzama yılı doldu — ${s.no}`,
+          aciklama: `Kiraya veren ${formatTarih(hedef)} tarihine kadar bildirimde bulunarak sözleşmeyi gerekçesiz feshedebilir (TBK 347/1).`,
+          hedefTarih: hedef, gorunurTarih: gunEkle(hedef, -30), oncelik: 'NORMAL', kararGerekli: false,
+        })
+      }
     }
   }
 
@@ -250,12 +277,17 @@ function sistemKurallari(v: HatirlatmaVerisi, ekle: Ekle): void {
     })
   }
   for (const p of v.parametreBitisleri) {
+    // Yürürlüğü 30 günden uzun önce biten parametre sessizce geçilir (geçmiş kayıtlar).
     if (karsilastir(v.bugun, gunEkle(p.yururlukBitis, 30)) > 0) continue
+    const doldu = karsilastir(v.bugun, p.yururlukBitis) > 0
     ekle({
       anahtar: `H13:parametre:${p.anahtar}:${p.yururlukBitis}`, kural: 'H13', iliskiliTur: 'parametre', iliskiliId: p.anahtar, sozlesmeId: null,
-      baslik: `Mevzuat parametresi süresi doluyor — ${p.anahtar}`,
-      aciklama: `${formatTarih(p.yururlukBitis)} sonrası için yeni değer girilmedi. Güncel mevzuatı kontrol edip yeni yürürlük kaydı ekleyin.`,
-      hedefTarih: p.yururlukBitis, gorunurTarih: gunEkle(p.yururlukBitis, -v.ayarlar.mevzuatOnceGun), oncelik: 'NORMAL', kararGerekli: true,
+      baslik: doldu ? `Mevzuat parametresinin süresi doldu — ${p.anahtar}` : `Mevzuat parametresi süresi doluyor — ${p.anahtar}`,
+      aciklama: doldu
+        ? `${formatTarih(p.yururlukBitis)} tarihinde yürürlüğü sona erdi ve sonrası için yeni değer girilmedi. Güncel mevzuatı kontrol edip yeni yürürlük kaydı ekleyin.`
+        : `${formatTarih(p.yururlukBitis)} sonrası için yeni değer girilmedi. Güncel mevzuatı kontrol edip yeni yürürlük kaydı ekleyin.`,
+      hedefTarih: p.yururlukBitis, gorunurTarih: gunEkle(p.yururlukBitis, -v.ayarlar.mevzuatOnceGun),
+      oncelik: doldu ? 'KRITIK' : 'NORMAL', kararGerekli: true,
     })
   }
 }
