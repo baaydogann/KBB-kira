@@ -6,6 +6,7 @@ const compat = new FlatCompat({ baseDirectory: dirname(fileURLToPath(import.meta
 
 const SAF_CEKIRDEK_MESAJI = 'src/core saf kalmalı: framework, veritabanı ve I/O importu yasak.'
 const PARA_MESAJI = 'Para/oran hesabında kayan nokta yasak; decimal.js (D) kullanın.'
+const SERVIS_MESAJI = 'Servis katmanı UI importu yapamaz.'
 
 const config = [
   {
@@ -22,10 +23,15 @@ const config = [
     files: ['src/core/**/*.ts'],
     rules: {
       'no-restricted-imports': ['error', {
-        patterns: [{
-          group: ['@/server/*', '@/app/*', '@/components/*', '@/generated/*', 'next', 'next/*', '@prisma/*', 'node:*', 'react', 'react/*'],
-          message: SAF_CEKIRDEK_MESAJI,
-        }],
+        patterns: [
+          {
+            group: ['@/server/*', '@/app/*', '@/components/*', '@/generated/*', 'next', 'next/*', '@prisma/*', 'node:*', 'react', 'react/*'],
+            message: SAF_CEKIRDEK_MESAJI,
+          },
+          // Göreli yolla katman atlatmayı da yakalar (../server/db, ../../app/x, ../../../src/server/y);
+          // çekirdek içi göreli importlar (./sonuc, ../para) serbest kalır.
+          { regex: '^(\\.\\./)+(.*/)?(server|app|components|generated)(/|$)', message: SAF_CEKIRDEK_MESAJI },
+        ],
       }],
     },
   },
@@ -44,7 +50,10 @@ const config = [
     files: ['src/server/**/*.ts'],
     rules: {
       'no-restricted-imports': ['error', {
-        patterns: [{ group: ['@/app/*', '@/components/*'], message: 'Servis katmanı UI importu yapamaz.' }],
+        patterns: [
+          { group: ['@/app/*', '@/components/*'], message: SERVIS_MESAJI },
+          { regex: '^(\\.\\./)+(.*/)?(app|components)(/|$)', message: SERVIS_MESAJI },
+        ],
       }],
     },
   },

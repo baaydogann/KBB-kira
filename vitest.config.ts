@@ -1,8 +1,7 @@
 import { defineConfig } from 'vitest/config'
-import tsconfigPaths from 'vite-tsconfig-paths'
 
 export default defineConfig({
-  plugins: [tsconfigPaths()],
+  resolve: { tsconfigPaths: true },
   // tsconfig "jsx": "preserve" taşır (Next SWC için). Vite 8'de oxc kapatılıp
   // esbuild JSX dönüşümü kullanılır; yalnızca test tarafını etkiler.
   oxc: false,
