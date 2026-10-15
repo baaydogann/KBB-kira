@@ -33,7 +33,11 @@ export async function oturumOlustur(g: { kullaniciId: number; ip: string | null;
 
 export async function oturumDogrula(token: string, simdi: Date = new Date()): Promise<OturumKullanicisi | null> {
   if (!token) return null
-  const o = await prisma.oturum.findUnique({ where: { tokenHash: tokenOzeti(token) }, include: { kullanici: true } })
+  // sifreHash her istekte belleğe yüklenmesin diye kullanıcı alanları açıkça seçilir.
+  const o = await prisma.oturum.findUnique({
+    where: { tokenHash: tokenOzeti(token) },
+    include: { kullanici: { select: { id: true, kullaniciAdi: true, adSoyad: true, aktif: true, sifreDegismeli: true } } },
+  })
   if (!o || o.iptalZamani || o.bitis <= simdi || o.mutlakBitis <= simdi || !o.kullanici.aktif) return null
   // Kayan süre: yazma maliyeti için yalnızca sürenin çeyreği tükenince uzatılır.
   if (o.bitis.getTime() - simdi.getTime() < OTURUM_SURESI_MS * 0.75) {

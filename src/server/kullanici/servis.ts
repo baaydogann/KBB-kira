@@ -8,6 +8,7 @@ import { ASGARI_SIFRE_UZUNLUGU, sifreHashle } from '../auth/parola'
 const KULLANICI_ADI = /^[a-z0-9._-]{3,40}$/
 
 function sifreKontrol(sifre: string, alan: string): void {
+  if (!sifre.trim()) throw new IsKuraliHatasi('SIFRE', 'Şifre boş olamaz.', alan)
   if (sifre.length < ASGARI_SIFRE_UZUNLUGU) {
     throw new IsKuraliHatasi('SIFRE', `Şifre en az ${ASGARI_SIFRE_UZUNLUGU} karakter olmalı.`, alan)
   }
@@ -55,6 +56,7 @@ export async function sifreSifirla(id: number, geciciSifre: string, baglam: Isle
   sifreKontrol(geciciSifre, 'geciciSifre')
   const ozet = await sifreHashle(geciciSifre)
   await prisma.$transaction(async (tx) => {
+    if (!(await tx.kullanici.findUnique({ where: { id }, select: { id: true } }))) throw new BulunamadiHatasi('Kullanıcı bulunamadı.')
     await tx.kullanici.update({ where: { id }, data: { sifreHash: ozet, sifreDegismeli: true, hataliGirisSayisi: 0, kilitBitis: null } })
     await kullaniciOturumlariniKapat(id, undefined, tx)
     await denetimKaydi(tx, baglam, { varlik: 'kullanici', varlikId: id, eylem: 'SIFRE_SIFIRLA' })

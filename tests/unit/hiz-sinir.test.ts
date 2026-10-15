@@ -10,4 +10,15 @@ describe('hizSinirlayici', () => {
     s.sifirla('a')
     expect(s.dene('a', 1002)).toBe(true)
   })
+
+  it('anahtar sayısı eşiği aşınca süresi dolmuş anahtarları siler, canlıları korur', () => {
+    const s = hizSinirlayici(1, 1000)
+    expect(s.dene('canli', 1500)).toBe(true)
+    for (let i = 0; i < 10_001; i++) s.dene(`ip-${i}`, 100)
+    expect(s.boyut()).toBe(10_002)
+    // 1600'de pencere (600, 1600]: ip-* (100) bayat, canli (1500) taze
+    expect(s.dene('yeni', 1600)).toBe(true)
+    expect(s.boyut()).toBe(2)
+    expect(s.dene('canli', 1601)).toBe(false)
+  })
 })

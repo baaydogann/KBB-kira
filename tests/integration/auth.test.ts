@@ -1,10 +1,17 @@
-import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { prisma } from '@/server/db'
-import { girisYap, sifreDegistir } from '@/server/auth/servis'
-import { oturumDogrula } from '@/server/auth/oturum'
+import { girisYap, istemciIp, sifreDegistir } from '@/server/auth/servis'
+import { OTURUM_SURESI_MS, oturumDogrula, tokenOzeti } from '@/server/auth/oturum'
+import { sifreDogrula, sifreHashle } from '@/server/auth/parola'
 import { kullaniciAktiflik, kullaniciOlustur, sifreSifirla } from '@/server/kullanici/servis'
-import { IsKuraliHatasi } from '@/server/hata'
+import { BulunamadiHatasi, IsKuraliHatasi } from '@/server/hata'
 import { TEST_BAGLAMI, temizle } from './yardimci'
+
+// Doğrulama sürerken eşzamanlı kilit koymayı taklit edebilmek için sarmalanır; varsayılan davranış gerçek sifreDogrula'dır.
+vi.mock('@/server/auth/parola', async (importOriginal) => {
+  const m = await importOriginal<typeof import('@/server/auth/parola')>()
+  return { ...m, sifreDogrula: vi.fn(m.sifreDogrula) }
+})
 
 const SIFRE = 'cok-guclu-sifre-123'
 let ipSayac = 0
@@ -54,12 +61,118 @@ describe('giriş', () => {
   })
 })
 
+describe('giriş kilidi eşzamanlılığı', () => {
+  it('8 paralel hatalı deneme kilidi koyar ve silmez', async () => {
+    await kullanici()
+    const simdi = new Date('2026-10-15T09:00:00Z')
+    const sonuclar = await Promise.all(
+      Array.from({ length: 8 }, () => girisYap({ kullaniciAdi: 'ayse.yilmaz', sifre: 'yanlis', ip: ip(), userAgent: null }, simdi)),
+    )
+    expect(sonuclar.every((r) => !r.ok)).toBe(true)
+    const k = await prisma.kullanici.findUniqueOrThrow({ where: { kullaniciAdi: 'ayse.yilmaz' } })
+    expect(k.kilitBitis?.toISOString()).toBe('2026-10-15T09:15:00.000Z')
+  })
+
+  it('doğrulama sürerken kilit konursa doğru şifre de KILITLI döner; oturum ve GIRIS kaydı oluşmaz', async () => {
+    const id = await kullanici()
+    const kilit = new Date('2026-10-15T09:15:00Z')
+    vi.mocked(sifreDogrula).mockImplementationOnce(async () => {
+      await prisma.kullanici.update({ where: { id }, data: { kilitBitis: kilit } })
+      return true
+    })
+    const r = await girisYap({ kullaniciAdi: 'ayse.yilmaz', sifre: SIFRE, ip: ip(), userAgent: null }, new Date('2026-10-15T09:00:00Z'))
+    expect(!r.ok && r.neden).toBe('KILITLI')
+    expect(!r.ok && r.kilitBitis?.toISOString()).toBe(kilit.toISOString())
+    expect(await prisma.oturum.count()).toBe(0)
+    expect(await prisma.olayGunlugu.count({ where: { eylem: 'GIRIS' } })).toBe(0)
+  })
+})
+
+describe('IP hız sınırı', () => {
+  it('bilinmeyen IP (null) ortak kovaya düşmez; bilinen IP sınırlanır', async () => {
+    await kullanici()
+    const simdi = new Date('2026-10-15T09:00:00Z')
+    for (let i = 0; i < 25; i++) {
+      await girisYap({ kullaniciAdi: 'yok', sifre: '', ip: null, userAgent: null }, simdi)
+    }
+    const r = await girisYap({ kullaniciAdi: 'ayse.yilmaz', sifre: SIFRE, ip: null, userAgent: null }, simdi)
+    expect(r.ok).toBe(true)
+
+    const adres = ip()
+    const sonuclar: string[] = []
+    for (let i = 0; i < 21; i++) {
+      const s = await girisYap({ kullaniciAdi: 'yok', sifre: '', ip: adres, userAgent: null }, simdi)
+      sonuclar.push(s.ok ? 'OK' : s.neden)
+    }
+    expect(sonuclar.slice(0, 20).every((n) => n === 'GECERSIZ')).toBe(true)
+    expect(sonuclar[20]).toBe('HIZ_SINIRI')
+  })
+})
+
+describe('istemciIp', () => {
+  const basliklar = (o: Record<string, string>) => new Headers(o)
+
+  it('X-Forwarded-For içinde en sağdaki (güvenilir vekilin eklediği) girdiyi alır', () => {
+    expect(istemciIp(basliklar({ 'x-forwarded-for': '1.2.3.4, 10.0.0.5' }))).toBe('10.0.0.5')
+    expect(istemciIp(basliklar({ 'x-forwarded-for': '1.2.3.4, ' }))).toBe('1.2.3.4')
+    expect(istemciIp(basliklar({ 'x-forwarded-for': '2001:db8::1' }))).toBe('2001:db8::1')
+  })
+
+  it('geçersiz değeri null yapar', () => {
+    expect(istemciIp(basliklar({ 'x-forwarded-for': 'garbage' }))).toBeNull()
+    expect(istemciIp(basliklar({ 'x-forwarded-for': '1.2.3.4, <script>' }))).toBeNull()
+    expect(istemciIp(basliklar({ 'x-forwarded-for': '1.2.3.4:8080' }))).toBeNull()
+    expect(istemciIp(basliklar({ 'x-real-ip': 'nope' }))).toBeNull()
+  })
+
+  it('X-Forwarded-For yoksa X-Real-IP, o da yoksa null', () => {
+    expect(istemciIp(basliklar({ 'x-real-ip': ' 192.168.1.9 ' }))).toBe('192.168.1.9')
+    expect(istemciIp(basliklar({ 'x-forwarded-for': ' ', 'x-real-ip': '192.168.1.9' }))).toBe('192.168.1.9')
+    expect(istemciIp(basliklar({}))).toBeNull()
+  })
+})
+
+describe('parola', () => {
+  it('argon2id, 64 MiB, t=3, p=1 ile hashler', async () => {
+    expect(await sifreHashle('x'.repeat(12))).toMatch(/^\$argon2id\$v=19\$m=65536,t=3,p=1\$/)
+  })
+})
+
 describe('oturum', () => {
   it('mutlak süre dolunca geçersizdir', async () => {
     await kullanici()
     const r = await girisYap({ kullaniciAdi: 'ayse.yilmaz', sifre: SIFRE, ip: ip(), userAgent: null })
     if (!r.ok) throw new Error('giriş başarısız')
     expect(await oturumDogrula(r.token, new Date(Date.now() + 25 * 60 * 60 * 1000))).toBeNull()
+  })
+
+  it('kayan süre mutlak süreyi aşmaz: +7s, +14s, +21s uzatır; +25s kapanır', async () => {
+    await kullanici()
+    const r = await girisYap({ kullaniciAdi: 'ayse.yilmaz', sifre: SIFRE, ip: ip(), userAgent: null })
+    if (!r.ok) throw new Error('giriş başarısız')
+    const satir = () => prisma.oturum.findUniqueOrThrow({ where: { tokenHash: tokenOzeti(r.token) } })
+    const ilk = await satir()
+    const baslangic = ilk.bitis.getTime() - OTURUM_SURESI_MS
+    const saat = 60 * 60 * 1000
+    let onceki = ilk.bitis.getTime()
+    for (const h of [7, 14, 21]) {
+      expect(await oturumDogrula(r.token, new Date(baslangic + h * saat))).not.toBeNull()
+      const o = await satir()
+      expect(o.bitis.getTime()).toBeGreaterThan(onceki)
+      expect(o.bitis.getTime()).toBeLessThanOrEqual(o.mutlakBitis.getTime())
+      onceki = o.bitis.getTime()
+    }
+    const son = await satir()
+    expect(son.bitis.getTime()).toBe(son.mutlakBitis.getTime())
+    expect(await oturumDogrula(r.token, new Date(baslangic + 25 * saat))).toBeNull()
+  })
+
+  it('bitiş gelecekte olsa da mutlak süresi dolmuş oturum geçersizdir', async () => {
+    await kullanici()
+    const r = await girisYap({ kullaniciAdi: 'ayse.yilmaz', sifre: SIFRE, ip: ip(), userAgent: null })
+    if (!r.ok) throw new Error('giriş başarısız')
+    await prisma.oturum.updateMany({ data: { bitis: new Date(Date.now() + 10 * 60 * 60 * 1000), mutlakBitis: new Date(Date.now() - 60_000) } })
+    expect(await oturumDogrula(r.token)).toBeNull()
   })
 
   it('pasifleştirilen kullanıcının açık oturumu düşer', async () => {
@@ -101,6 +214,21 @@ describe('kullanıcı servisi', () => {
     await kullanici()
     await expect(kullanici('ayse.yilmaz')).rejects.toBeInstanceOf(IsKuraliHatasi)
     await expect(kullanici('A B')).rejects.toBeInstanceOf(IsKuraliHatasi)
+  })
+  it('yalnızca boşluktan oluşan şifre doğrulama hatasıdır (500 değil)', async () => {
+    const bosluk = ' '.repeat(12)
+    await expect(
+      kullaniciOlustur({ kullaniciAdi: 'bosluk.sifre', adSoyad: 'Ayşe Yılmaz', geciciSifre: bosluk }, TEST_BAGLAMI),
+    ).rejects.toBeInstanceOf(IsKuraliHatasi)
+    const id = await kullanici()
+    await expect(sifreSifirla(id, bosluk, TEST_BAGLAMI)).rejects.toBeInstanceOf(IsKuraliHatasi)
+    const r = await girisYap({ kullaniciAdi: 'ayse.yilmaz', sifre: SIFRE, ip: ip(), userAgent: null })
+    if (!r.ok) throw new Error('giriş başarısız')
+    const o = (await oturumDogrula(r.token))!
+    expect((await sifreDegistir({ kullaniciId: id, oturumId: o.oturumId, eski: SIFRE, yeni: bosluk, ip: null })).ok).toBe(false)
+  })
+  it('olmayan kullanıcının şifresi sıfırlanamaz', async () => {
+    await expect(sifreSifirla(987_654, 'gecici-sifre-7890', TEST_BAGLAMI)).rejects.toBeInstanceOf(BulunamadiHatasi)
   })
   it('kendi hesabını pasifleştiremez', async () => {
     const id = await kullanici()

@@ -1,15 +1,21 @@
 import { cookies } from 'next/headers'
+import { ortam } from '../env'
+import { OTURUM_MUTLAK_MS } from './oturum'
 
 export const OTURUM_CEREZI = 'kbbkira_oturum'
 
-export async function cerezYaz(token: string, bitis: Date): Promise<void> {
+/**
+ * Çerez ömrü mutlak oturum süresidir; boşta kalma (8 sa) ve mutlak (24 sa) sınırları sunucuda,
+ * oturum kaydı üzerinden uygulanır. Böylece kayan süre istemci tarafında kesilmez.
+ */
+export async function cerezYaz(token: string): Promise<void> {
   const depo = await cookies()
   depo.set(OTURUM_CEREZI, token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    secure: ortam().APP_URL.startsWith('https://'),
     sameSite: 'lax',
     path: '/',
-    expires: bitis,
+    maxAge: OTURUM_MUTLAK_MS / 1000,
   })
 }
 
