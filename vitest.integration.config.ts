@@ -1,8 +1,9 @@
 import { defineConfig } from 'vitest/config'
 import { loadEnv } from 'vite'
 
-// mode "test": .env ve .env.test okunur (.env.local atlanır). globalSetup aynı
-// süreçte çalıştığı için değişkenler process.env'e de yazılır.
+// mode "test": Vite .env, .env.local, .env.test ve .env.test.local dosyalarını okur
+// (sonraki dosya öncekini ezer); zaten tanımlı process.env değerleri dosyalardan üstündür.
+// globalSetup aynı süreçte çalıştığı için değişkenler process.env'e de yazılır.
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   Object.assign(process.env, env)

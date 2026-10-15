@@ -1,5 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import type { Prisma } from '@/generated/prisma'
 import { prisma } from '@/server/db'
+import { benzersizIhlaliMi } from '@/server/hata'
 import { temizle } from './yardimci'
 import { ornekKisi, ornekSozlesme } from './ornekler'
 
@@ -50,10 +52,63 @@ describe('veritabanı kısıtları', () => {
     const temel = { sozlesmeId: s.id, tur: 'NORMAL' as const, donemBaslangic: new Date('2026-01-01'), donemBitis: new Date('2026-01-31'), vadeTarihi: new Date('2026-01-01'), tutar: '1', hesapGoruntusu: {} }
     await prisma.taksit.create({ data: { ...temel, durum: 'IPTAL' } })
     await prisma.taksit.create({ data: temel })
-    await expect(prisma.taksit.create({ data: temel })).rejects.toThrow()
+    // Kısmi tekil indeks (taksit_donem_tekil) Prisma'da P2002 + sütun hedefi olarak görünür.
+    const hata = await prisma.taksit.create({ data: temel }).catch((e: unknown) => e)
+    expect(benzersizIhlaliMi(hata)).toBe(true)
+    expect((hata as Prisma.PrismaClientKnownRequestError).meta?.target).toEqual(['sozlesme_id', 'donem_baslangic'])
   })
 
   it('geçiş bedeli olmadan geçiş tarihi girilemez', async () => {
     await expect(ornekSozlesme({ gecisTarihi: new Date('2026-06-01') })).rejects.toThrow(/sozlesme_gecis/)
+  })
+
+  it('geçiş tarihi olmadan geçiş bedeli girilemez', async () => {
+    await expect(ornekSozlesme({ gecisBedeli: '5000.00' })).rejects.toThrow(/sozlesme_gecis_cift/)
+  })
+
+  it('FARK taksiti ana taksit ve artış hesabına bağlı olmalı', async () => {
+    const s = await ornekSozlesme()
+    const fark = { sozlesmeId: s.id, tur: 'FARK' as const, donemBaslangic: new Date('2026-01-01'), donemBitis: new Date('2026-01-31'), vadeTarihi: new Date('2026-01-01'), tutar: '1', hesapGoruntusu: {} }
+    await expect(prisma.taksit.create({ data: fark })).rejects.toThrow(/taksit_fark_baglantili/)
+  })
+})
+
+describe('hisse toplamı: bitmiş hisseler ve doğrudan AKTIF ekleme', () => {
+  const BASLANGIC = new Date('2026-01-01')
+
+  it('tek malikin hissesi sözleşme bitmeden bitip yerine kimse gelmezse reddedilir', async () => {
+    const s = await ornekSozlesme()
+    const a = await ornekKisi()
+    await prisma.sozlesmeMalik.create({ data: { sozlesmeId: s.id, kisiId: a.id, pay: 1, payda: 1, gecerlilikBaslangic: BASLANGIC, gecerlilikBitis: new Date('2026-06-30') } })
+    await expect(prisma.sozlesme.update({ where: { id: s.id }, data: { durum: 'AKTIF' } })).rejects.toThrow(/HISSE_TOPLAMI_HATALI/)
+  })
+
+  it('yarım hisse sözleşme ortasında bitip yerine kimse gelmezse reddedilir', async () => {
+    const s = await ornekSozlesme()
+    const a = await ornekKisi()
+    const b = await ornekKisi()
+    await prisma.sozlesmeMalik.create({ data: { sozlesmeId: s.id, kisiId: a.id, pay: 1, payda: 2, gecerlilikBaslangic: BASLANGIC } })
+    await prisma.sozlesmeMalik.create({ data: { sozlesmeId: s.id, kisiId: b.id, pay: 1, payda: 2, gecerlilikBaslangic: BASLANGIC, gecerlilikBitis: new Date('2026-06-30') } })
+    await expect(prisma.sozlesme.update({ where: { id: s.id }, data: { durum: 'AKTIF' } })).rejects.toThrow(/HISSE_TOPLAMI_HATALI/)
+  })
+
+  it('devir kabul edilir: eski malik D-1 günü biter, yeni malik D günü başlar', async () => {
+    const s = await ornekSozlesme()
+    const eski = await ornekKisi()
+    const yeni = await ornekKisi()
+    await prisma.sozlesmeMalik.create({ data: { sozlesmeId: s.id, kisiId: eski.id, pay: 1, payda: 1, gecerlilikBaslangic: BASLANGIC, gecerlilikBitis: new Date('2026-06-30') } })
+    await prisma.sozlesmeMalik.create({ data: { sozlesmeId: s.id, kisiId: yeni.id, pay: 1, payda: 1, gecerlilikBaslangic: new Date('2026-07-01') } })
+    await expect(prisma.sozlesme.update({ where: { id: s.id }, data: { durum: 'AKTIF' } })).resolves.toBeTruthy()
+  })
+
+  it('hisse tam sözleşme bitiş gününde biterse kabul edilir', async () => {
+    const s = await ornekSozlesme()
+    const a = await ornekKisi()
+    await prisma.sozlesmeMalik.create({ data: { sozlesmeId: s.id, kisiId: a.id, pay: 1, payda: 1, gecerlilikBaslangic: BASLANGIC, gecerlilikBitis: new Date('2026-12-31') } })
+    await expect(prisma.sozlesme.update({ where: { id: s.id }, data: { durum: 'AKTIF' } })).resolves.toBeTruthy()
+  })
+
+  it('maliksiz sözleşme doğrudan AKTIF eklenemez', async () => {
+    await expect(ornekSozlesme({ durum: 'AKTIF' })).rejects.toThrow(/HISSE_TOPLAMI_HATALI/)
   })
 })
