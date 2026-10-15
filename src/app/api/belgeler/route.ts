@@ -13,10 +13,13 @@ const AZAMI_GOVDE_BAYT = BELGE_AZAMI_BAYT + 1024 * 1024
 
 const hata = (mesaj: string, status: number) => NextResponse.json({ hata: mesaj }, { status })
 
-/** CSRF: yükleme yalnızca uygulamanın kendi sayfasından gelir. "null" ya da bozuk Origin da reddedilir. */
+/**
+ * CSRF: yükleme yalnızca uygulamanın kendi sayfasından gelir. "null" ya da bozuk Origin da reddedilir.
+ * Ters vekil Host'u iç adla değiştirebilir; Next'in server action denetimi gibi önce X-Forwarded-Host (ilk değer) kullanılır.
+ */
 function ayniKaynakMi(istek: NextRequest): boolean {
   const origin = istek.headers.get('origin')
-  const host = istek.headers.get('host')
+  const host = istek.headers.get('x-forwarded-host')?.split(',')[0]?.trim() || istek.headers.get('host')
   if (!origin || !host) return false
   try {
     return new URL(origin).host === host

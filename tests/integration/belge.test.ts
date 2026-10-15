@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { NextRequest } from 'next/server'
@@ -12,7 +12,26 @@ vi.mock('@/server/env', async (importOriginal) => {
   const m = await importOriginal<typeof import('@/server/env')>()
   return { ...m, ortam: () => ({ ...m.ortam(), BELGE_DIZINI: taklit.dizin || m.ortam().BELGE_DIZINI }) }
 })
-vi.mock('@/server/auth/gerekli', () => ({ kullaniciGetir: async () => taklit.kullanici }))
+vi.mock('@/server/auth/gerekli', () => ({
+  kullaniciGetir: async () => taklit.kullanici,
+  islemBaglami: async (k: { id: number }) => ({ kullaniciId: k.id, ip: '203.0.113.7' }),
+}))
+
+// Disk dolması gibi bir yazma hatasını taklit eder: geçici dosyanın bir kısmı yazılır, sonra hata verilir.
+const diskTaklit = vi.hoisted(() => ({ yazmaHatasi: null as Error | null }))
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const m = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...m,
+    writeFile: async (...a: Parameters<typeof m.writeFile>) => {
+      if (diskTaklit.yazmaHatasi && String(a[0]).endsWith('.tmp')) {
+        await m.writeFile(a[0], (a[1] as Uint8Array).subarray(0, 5))
+        throw diskTaklit.yazmaHatasi
+      }
+      return m.writeFile(...a)
+    },
+  }
+})
 
 import { GET } from '@/app/api/belgeler/[id]/route'
 import { POST } from '@/app/api/belgeler/route'
@@ -21,7 +40,7 @@ import { ortam } from '@/server/env'
 import { BELGE_AZAMI_BAYT, belgeKaydet, belgeListesi, belgeOku, belgeyiBagla, sozlesmePdfVarMi } from '@/server/belge/servis'
 import { IsKuraliHatasi } from '@/server/hata'
 import { temizle } from './yardimci'
-import { ornekSozlesme } from './ornekler'
+import { ornekKisi, ornekSozlesme, ornekTasinmaz } from './ornekler'
 
 const PDF = new TextEncoder().encode('%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n')
 const BAGLAM = { kullaniciId: 1, ip: null }
@@ -30,6 +49,7 @@ beforeEach(async () => {
   await rm(taklit.dizin, { recursive: true, force: true })
   taklit.dizin = await mkdtemp(join(tmpdir(), 'kbb-belge-'))
   taklit.kullanici = { id: 1 }
+  diskTaklit.yazmaHatasi = null
   await temizle()
   await prisma.kullanici.create({ data: { id: 1, kullaniciAdi: 'test', adSoyad: 'Test', sifreHash: 'x' } })
   await prisma.kullanici.create({ data: { id: 2, kullaniciAdi: 'diger', adSoyad: 'Diğer', sifreHash: 'x' } })
@@ -89,7 +109,11 @@ describe('belge deposu', () => {
     ['   ', 'belge.pdf'],
     ['', 'belge.pdf'],
     [`${'u'.repeat(300)}.pdf`, `${'u'.repeat(196)}.pdf`],
-  ])('dosya adı %j yol/denetim karakteri içermeyen %j olarak saklanır', async (girdi, beklenen) => {
+    // kesme kod noktası sınırında yapılır: yarım vekil çift (lone surrogate) kalmaz
+    [`${'u'.repeat(199)}😀`, `${'u'.repeat(196)}.pdf`],
+    [`${'u'.repeat(195)}😀😀😀`, `${'u'.repeat(195)}😀.pdf`],
+    ['yarim\uD800vekil.pdf', 'yarimvekil.pdf'],
+  ])('dosya adı #%# yol/denetim karakteri içermeyen ada çevrilip saklanır', async (girdi, beklenen) => {
     const id = await belgeKaydet({ sahipTur: 'gecici', sahipId: 1, belgeTuru: 'DIGER', dosyaAdi: girdi, icerik: PDF }, BAGLAM)
     expect((await prisma.belge.findUniqueOrThrow({ where: { id } })).dosyaAdi).toBe(beklenen)
     // dosya adı depo yolunu hiçbir biçimde etkilemez
@@ -149,16 +173,72 @@ describe('belge deposu', () => {
     const id = await belgeKaydet({ sahipTur: 'gecici', sahipId: 1, belgeTuru: 'SOZLESME', dosyaAdi: 'g.pdf', icerik: PDF }, BAGLAM)
     await expect(belgeyiBagla(prisma, id, 'sozlesme', s.id, { kullaniciId: null, ip: null })).rejects.toBeInstanceOf(IsKuraliHatasi)
   })
+
+  it.each(['sozlesme', 'tasinmaz', 'kisi'] as const)('%s sahibi yoksa yükleme reddedilir, satır da depo dosyası da yazılmaz', async (tur) => {
+    const hata = await belgeKaydet({ sahipTur: tur, sahipId: 424242, belgeTuru: 'DIGER', dosyaAdi: 'y.pdf', icerik: PDF }, BAGLAM).catch((e: unknown) => e)
+    expect(hata).toBeInstanceOf(IsKuraliHatasi)
+    expect(hata).toMatchObject({ kod: 'SAHIP', alan: 'sahipId', message: 'Belgenin bağlanacağı kayıt bulunamadı.' })
+    expect(await prisma.belge.count()).toBe(0)
+    expect(await depoDosyalari()).toEqual([])
+    expect(await sozlesmePdfVarMi(424242)).toBe(false)
+  })
+
+  it('var olan taşınmaz ve kişiye belge eklenir', async () => {
+    const t = await ornekTasinmaz()
+    const k = await ornekKisi()
+    await belgeKaydet({ sahipTur: 'tasinmaz', sahipId: t.id, belgeTuru: 'TAPU', dosyaAdi: 't.pdf', icerik: PDF }, BAGLAM)
+    await belgeKaydet({ sahipTur: 'kisi', sahipId: k.id, belgeTuru: 'DIGER', dosyaAdi: 'k.pdf', icerik: PDF }, BAGLAM)
+    expect(await belgeListesi('tasinmaz', t.id)).toHaveLength(1)
+    expect(await belgeListesi('kisi', k.id)).toHaveLength(1)
+  })
+
+  it('var olmayan kayda bağlama reddedilir; geçici belge geçici kalır ve BAGLA denetimi yazılmaz', async () => {
+    const id = await belgeKaydet({ sahipTur: 'gecici', sahipId: 1, belgeTuru: 'SOZLESME', dosyaAdi: 'g.pdf', icerik: PDF }, BAGLAM)
+    for (const tur of ['sozlesme', 'tasinmaz', 'kisi'] as const) {
+      const hata = await belgeyiBagla(prisma, id, tur, 424242, BAGLAM).catch((e: unknown) => e)
+      expect(hata).toBeInstanceOf(IsKuraliHatasi)
+      expect(hata).toMatchObject({ kod: 'SAHIP', alan: 'sahipId' })
+    }
+    expect(await prisma.belge.findUniqueOrThrow({ where: { id } })).toMatchObject({ sahipTur: 'gecici', sahipId: 1 })
+    expect(await prisma.olayGunlugu.count({ where: { varlik: 'belge', eylem: 'BAGLA' } })).toBe(0)
+    // doğru kayda bağlanabilir
+    const s = await ornekSozlesme()
+    await belgeyiBagla(prisma, id, 'sozlesme', s.id, BAGLAM)
+    expect(await belgeListesi('sozlesme', s.id)).toHaveLength(1)
+  })
+
+  // Windows dosya kiplerini yok sayar; kip denetimi yalnızca POSIX'te anlamlıdır (Docker/Linux üretim hedefi).
+  if (process.platform !== 'win32') {
+    it('depo dizinleri yalnızca sahibine (0700), dosyalar 0600 açılır', async () => {
+      const id = await belgeKaydet({ sahipTur: 'gecici', sahipId: 1, belgeTuru: 'DIGER', dosyaAdi: 'k.pdf', icerik: PDF }, BAGLAM)
+      const sha = (await prisma.belge.findUniqueOrThrow({ where: { id } })).sha256
+      expect((await stat(join(taklit.dizin, sha.slice(0, 2)))).mode & 0o777).toBe(0o700)
+      expect((await stat(join(taklit.dizin, sha.slice(0, 2), `${sha}.pdf`))).mode & 0o777).toBe(0o600)
+    })
+  }
+
+  it('geçici dosya yazımı yarıda kesilirse hata iletilir, *.tmp kalmaz ve içerik sonra yüklenebilir', async () => {
+    diskTaklit.yazmaHatasi = Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' })
+    await expect(belgeKaydet({ sahipTur: 'gecici', sahipId: 1, belgeTuru: 'DIGER', dosyaAdi: 'd.pdf', icerik: PDF }, BAGLAM)).rejects.toBe(diskTaklit.yazmaHatasi)
+    expect(await depoDosyalari()).toEqual([])
+    expect(await prisma.belge.count()).toBe(0)
+
+    diskTaklit.yazmaHatasi = null
+    const id = await belgeKaydet({ sahipTur: 'gecici', sahipId: 1, belgeTuru: 'DIGER', dosyaAdi: 'd.pdf', icerik: PDF }, BAGLAM)
+    const sha = (await prisma.belge.findUniqueOrThrow({ where: { id } })).sha256
+    expect(await depoDosyalari()).toEqual([`${sha.slice(0, 2)}/${sha}.pdf`])
+  })
 })
 
 const KAYNAK = 'http://localhost:3000'
 
-function yuklemeIstegi(alanlar: Record<string, string | File>, ek: { origin?: string | null; uzunluk?: string } = {}): NextRequest {
+function yuklemeIstegi(alanlar: Record<string, string | File>, ek: { origin?: string | null; uzunluk?: string; host?: string; ileriHost?: string } = {}): NextRequest {
   const f = new FormData()
   for (const [ad, deger] of Object.entries(alanlar)) f.set(ad, deger)
-  const basliklar = new Headers({ host: 'localhost:3000' })
+  const basliklar = new Headers({ host: ek.host ?? 'localhost:3000' })
   if (ek.origin !== null) basliklar.set('origin', ek.origin ?? KAYNAK)
   if (ek.uzunluk !== undefined) basliklar.set('content-length', ek.uzunluk)
+  if (ek.ileriHost !== undefined) basliklar.set('x-forwarded-host', ek.ileriHost)
   return new NextRequest(`${KAYNAK}/api/belgeler`, { method: 'POST', headers: basliklar, body: f })
 }
 
@@ -184,6 +264,42 @@ describe('POST /api/belgeler', () => {
     const r = await POST(yuklemeIstegi({ dosya: pdfDosyasi(), sahipTur: 'gecici', sahipId: '0', belgeTuru: 'DIGER' }, { origin }))
     expect(r.status).toBe(403)
     expect(await prisma.belge.count()).toBe(0)
+  })
+
+  describe('ters vekil arkasında Origin denetimi', () => {
+    const alanlar = () => ({ dosya: pdfDosyasi(), sahipTur: 'gecici', sahipId: '0', belgeTuru: 'DIGER' })
+
+    it('X-Forwarded-Host varsa Origin onunla karşılaştırılır (Host vekilin iç adı olsa da)', async () => {
+      const r = await POST(yuklemeIstegi(alanlar(), { host: 'app:3000', ileriHost: 'kira.example', origin: 'https://kira.example' }))
+      expect(r.status).toBe(200)
+    })
+
+    it('X-Forwarded-Host listesinde ilk değer geçerlidir', async () => {
+      const r = await POST(yuklemeIstegi(alanlar(), { host: 'app:3000', ileriHost: ' kira.example , vekil2.ic', origin: 'https://kira.example' }))
+      expect(r.status).toBe(200)
+    })
+
+    it.each([
+      ['yabancı Origin', 'https://kotu.example'],
+      ['vekilin iç Host adı (X-Forwarded-Host öncelikli)', 'http://app:3000'],
+    ])('%s: 403 verir', async (_ad, origin) => {
+      const r = await POST(yuklemeIstegi(alanlar(), { host: 'app:3000', ileriHost: 'kira.example', origin }))
+      expect(r.status).toBe(403)
+      expect(await prisma.belge.count()).toBe(0)
+    })
+
+    it('boş X-Forwarded-Host yok sayılır, Host kullanılır', async () => {
+      const r = await POST(yuklemeIstegi(alanlar(), { host: 'kira.example', ileriHost: '', origin: 'https://kira.example' }))
+      expect(r.status).toBe(200)
+    })
+  })
+
+  it.each(['sozlesme', 'tasinmaz', 'kisi'])('olmayan %s kimliği 422 verir; satır da depo dosyası da yazılmaz', async (tur) => {
+    const r = await POST(yuklemeIstegi({ dosya: pdfDosyasi(), sahipTur: tur, sahipId: '424242', belgeTuru: 'DIGER' }))
+    expect(r.status).toBe(422)
+    expect(await r.json()).toEqual({ hata: 'Belgenin bağlanacağı kayıt bulunamadı.' })
+    expect(await prisma.belge.count()).toBe(0)
+    expect(await depoDosyalari()).toEqual([])
   })
 
   it('geçerli PDF\'i kaydeder: 200 { id }, yükleyen oturumdaki kullanıcıdır, denetim kaydında dosya adı yoktur', async () => {
@@ -296,6 +412,7 @@ describe('GET /api/belgeler/:id', () => {
     expect(r.headers.get('x-content-type-options')).toBe('nosniff')
     expect(r.headers.get('cache-control')).toBe('private, no-store')
     expect(r.headers.get('content-disposition')).toBe("inline; filename*=UTF-8''Ay%C5%9Fe%20Y%C4%B1lmaz%20s%C3%B6zle%C5%9Fme.pdf")
+    expect(r.headers.get('content-length')).toBe(String(PDF.byteLength))
     expect(new Uint8Array(await r.arrayBuffer())).toEqual(PDF)
   })
 
@@ -303,6 +420,32 @@ describe('GET /api/belgeler/:id', () => {
     const id = await yukle("Ali'nin (taslak)*.pdf")
     const r = await indir(String(id))
     expect(r.headers.get('content-disposition')).toBe("inline; filename*=UTF-8''Ali%27nin%20%28taslak%29%2A.pdf")
+    await r.arrayBuffer()
+  })
+
+  it('199 karakter + emoji içeren ad kod noktası sınırında kesilir ve Content-Disposition kodlaması hata vermez', async () => {
+    const uzun = await yukle(`${'u'.repeat(199)}😀`)
+    const r1 = await indir(String(uzun))
+    expect(r1.status).toBe(200)
+    expect(r1.headers.get('content-disposition')).toBe(`inline; filename*=UTF-8''${'u'.repeat(196)}.pdf`)
+    await r1.arrayBuffer()
+
+    const sinir = await yukle(`${'u'.repeat(195)}😀😀😀`)
+    const r2 = await indir(String(sinir))
+    expect(r2.status).toBe(200)
+    expect(r2.headers.get('content-disposition')).toBe(`inline; filename*=UTF-8''${'u'.repeat(195)}%F0%9F%98%80.pdf`)
+    await r2.arrayBuffer()
+  })
+
+  it('büyük dosyayı akışla, eksiksiz ve doğru Content-Length ile sunar', async () => {
+    const buyuk = new Uint8Array(5 * 1024 * 1024 + 3)
+    buyuk.set(PDF)
+    for (let i = PDF.byteLength; i < buyuk.byteLength; i += 4099) buyuk[i] = i % 251
+    const id = await belgeKaydet({ sahipTur: 'gecici', sahipId: 1, belgeTuru: 'DIGER', dosyaAdi: 'buyuk.pdf', icerik: buyuk }, BAGLAM)
+    const r = await indir(String(id))
+    expect(r.status).toBe(200)
+    expect(r.headers.get('content-length')).toBe(String(buyuk.byteLength))
+    expect(Buffer.from(await r.arrayBuffer()).equals(Buffer.from(buyuk))).toBe(true)
   })
 
   it.each(['abc', '', '1e0', '0x1', '+1', '1.0', '-1', '0', ' 1', '1 ', '99999999999', '2147483648'])('geçersiz kimlik %j: 404 verir', async (kimlik) => {
@@ -314,5 +457,72 @@ describe('GET /api/belgeler/:id', () => {
   it('olmayan belge için 404 verir', async () => {
     const id = await yukle()
     expect((await indir(String(id + 1))).status).toBe(404)
+  })
+
+  describe('indirme denetimi', () => {
+    const indirmeler = () => prisma.olayGunlugu.findMany({ where: { varlik: 'belge', eylem: 'INDIR' } })
+
+    it('her başarılı indirme için tam bir INDIR satırı yazar: yalnızca kimlik, kullanıcı ve IP', async () => {
+      const id = await yukle('Ayşe Yılmaz sözleşme.pdf')
+      expect(await indirmeler()).toHaveLength(0)
+      await (await indir(String(id))).arrayBuffer()
+      const ilk = await indirmeler()
+      expect(ilk).toHaveLength(1)
+      expect(ilk[0]).toMatchObject({ varlik: 'belge', varlikId: String(id), eylem: 'INDIR', kullaniciId: 1, ip: '203.0.113.7', once: null, sonra: null })
+      await (await indir(String(id))).arrayBuffer()
+      expect(await indirmeler()).toHaveLength(2)
+    })
+
+    it('401, geçersiz kimlik ve olmayan belgede INDIR yazılmaz', async () => {
+      const id = await yukle()
+      taklit.kullanici = null
+      expect((await indir(String(id))).status).toBe(401)
+      taklit.kullanici = { id: 1 }
+      expect((await indir('1e0')).status).toBe(404)
+      expect((await indir(String(id + 1))).status).toBe(404)
+      expect(await indirmeler()).toHaveLength(0)
+    })
+  })
+
+  describe('depo dosyası okunamıyorsa', () => {
+    const GENEL_MESAJ = 'Belge dosyasına şu anda erişilemiyor. Sistem yöneticisine bildirin.'
+
+    it.each([
+      ['dosya kaybolmuş', async (yol: string) => rm(yol)],
+      ['dosya kısalmış', async (yol: string) => writeFile(yol, PDF.subarray(0, 7))],
+    ])('%s: 500 + genel mesaj verir; ham hata, yol ve dosya adı sızmaz; kimlikle günlüğe yazar; INDIR yazılmaz', async (_ad, boz) => {
+      const id = await yukle('Ayşe Yılmaz sözleşme.pdf')
+      const sha = (await prisma.belge.findUniqueOrThrow({ where: { id } })).sha256
+      await boz(join(taklit.dizin, sha.slice(0, 2), `${sha}.pdf`))
+      const gunluk = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+      try {
+        const r = await indir(String(id))
+        expect(r.status).toBe(500)
+        const metin = await r.text()
+        expect(metin).toBe(GENEL_MESAJ)
+        for (const sizmamali of ['ENOENT', taklit.dizin, sha, 'Yılmaz']) expect(metin).not.toContain(sizmamali)
+        expect(gunluk).toHaveBeenCalledTimes(1)
+        const kayit = String(gunluk.mock.calls[0]?.[0])
+        expect(kayit).toContain(`belgeId=${id}`)
+        expect(kayit).not.toContain('Yılmaz')
+      } finally {
+        gunluk.mockRestore()
+      }
+      expect(await prisma.olayGunlugu.count({ where: { varlik: 'belge', eylem: 'INDIR' } })).toBe(0)
+    })
+
+    it('veritabanındaki bozuk sha256 de aynı genel yanıtı verir', async () => {
+      const id = await yukle()
+      await prisma.belge.update({ where: { id }, data: { sha256: '../../../etc/passwd' } })
+      const gunluk = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+      try {
+        const r = await indir(String(id))
+        expect(r.status).toBe(500)
+        expect(await r.text()).toBe(GENEL_MESAJ)
+        expect(String(gunluk.mock.calls[0]?.[0])).toContain(`belgeId=${id}`)
+      } finally {
+        gunluk.mockRestore()
+      }
+    })
   })
 })
