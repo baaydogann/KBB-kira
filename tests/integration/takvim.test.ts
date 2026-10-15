@@ -116,29 +116,66 @@ describe('.ics takvim', () => {
     expect(ics.indexOf('ACIK-BUGUN')).toBeLessThan(ics.indexOf('ERTELENDI-KAYIT'))
   })
 
-  it('ertelenmiş kayıt erteleme gününde geri döner: etkinlik tarihi ve 7 günlük pencere ertelenen tarihe göre (yoksa hedefe)', async () => {
+  // Kural (bugün 15 Ekim, eşik 8 Ekim): ERTELENDI kayıt `ertelenen >= eşik` ya da `hedef >= eşik` ise girer; etkinlik tarihi
+  // `ertelenen >= eşik` ise ertelenen tarih, değilse hedef tarihidir.
+  it('ertelenmiş kayıt: ertelenen tarih eşikten yeniyse o günde, eskiyse (ya da yoksa) hedef tarihinde görünür; hedefi yaklaşan kayıt kaybolmaz', async () => {
     const kid = await yeniKullanici('erteleme')
     const token = await icsTokenUret(kid, TEST_BAGLAMI)
     await hatirlatmaEkle({ baslik: 'ACIK-NORMAL', hedefTarih: dbTarih(t('2026-10-20')) })
     // Hedefi çok eski, erteleme günü yakın: erteleme gününde görünür.
     await hatirlatmaEkle({ baslik: 'SNOOZE-GECIKMIS', durum: 'ERTELENDI', hedefTarih: dbTarih(t('2026-09-01')), ertelenenTarih: dbTarih(t('2026-10-25')) })
-    // Hedefi uzak, erteleme günü pencerenin hemen içinde (bugün - 7) ve hemen dışında (bugün - 8).
+    // Erteleme günü pencerenin tam sınırında (bugün - 7): ertelenen tarih geçerli.
     await hatirlatmaEkle({ baslik: 'SNOOZE-SINIR', durum: 'ERTELENDI', hedefTarih: dbTarih(t('2026-12-01')), ertelenenTarih: dbTarih(t('2026-10-08')) })
+    // Erteleme günü pencerenin dışında (bugün - 8) ama hedef ileride: kayıt hedef tarihinde takvimde kalır (açık hatırlatma kaybolmaz).
     await hatirlatmaEkle({ baslik: 'SNOOZE-ESKI', durum: 'ERTELENDI', hedefTarih: dbTarih(t('2026-11-20')), ertelenenTarih: dbTarih(t('2026-10-07')) })
+    // Erteleme günü pencerenin dışında, hedef pencerenin içinde (geçmişte): hedef tarihi.
+    await hatirlatmaEkle({ baslik: 'SNOOZE-HEDEF-PENCEREDE', durum: 'ERTELENDI', hedefTarih: dbTarih(t('2026-10-10')), ertelenenTarih: dbTarih(t('2026-10-02')) })
     // Erteleme tarihi yoksa hedef tarih geçerlidir.
     await hatirlatmaEkle({ baslik: 'SNOOZE-TARIHSIZ', durum: 'ERTELENDI', hedefTarih: dbTarih(t('2026-10-18')) })
     await hatirlatmaEkle({ baslik: 'SNOOZE-TARIHSIZ-ESKI', durum: 'ERTELENDI', hedefTarih: dbTarih(t('2026-10-07')) })
     const ics = (await takvimIcerigi(token, BUGUN))!
     expect(etkinlik(ics, 'SNOOZE-GECIKMIS')).toContain('DTSTART;VALUE=DATE:20261025\r\n')
     expect(etkinlik(ics, 'SNOOZE-SINIR')).toContain('DTSTART;VALUE=DATE:20261008\r\n')
+    expect(etkinlik(ics, 'SNOOZE-ESKI')).toContain('DTSTART;VALUE=DATE:20261120\r\n')
+    expect(etkinlik(ics, 'SNOOZE-HEDEF-PENCEREDE')).toContain('DTSTART;VALUE=DATE:20261010\r\n')
     expect(etkinlik(ics, 'SNOOZE-TARIHSIZ')).toContain('DTSTART;VALUE=DATE:20261018\r\n')
-    expect(duzles(ics)).not.toContain('SNOOZE-ESKI')
     expect(duzles(ics)).not.toContain('SNOOZE-TARIHSIZ-ESKI')
-    expect(ics.match(/BEGIN:VEVENT/g)).toHaveLength(4)
+    expect(ics.match(/BEGIN:VEVENT/g)).toHaveLength(6)
     // Sıra etkinlik tarihine göredir.
-    const sira = ['SNOOZE-SINIR', 'SNOOZE-TARIHSIZ', 'ACIK-NORMAL', 'SNOOZE-GECIKMIS'].map((b) => duzles(ics).indexOf(b))
+    const sira = ['SNOOZE-SINIR', 'SNOOZE-HEDEF-PENCEREDE', 'SNOOZE-TARIHSIZ', 'ACIK-NORMAL', 'SNOOZE-GECIKMIS', 'SNOOZE-ESKI']
+      .map((b) => duzles(ics).indexOf(`] ${b}\r\n`))
     expect(sira).toEqual([...sira].sort((a, b) => a - b))
-    expect(new Set(sira).size).toBe(4)
+    expect(new Set(sira).size).toBe(6)
+    expect(sira[0]).toBeGreaterThan(-1)
+  })
+
+  it('ertelenen tarihi de hedef tarihi de pencere dışındaki ertelenmiş kayıt akışa girmez', async () => {
+    const kid = await yeniKullanici('erteleme.eski')
+    const token = await icsTokenUret(kid, TEST_BAGLAMI)
+    await hatirlatmaEkle({ baslik: 'ESKI-ERTELEME-VE-HEDEF', durum: 'ERTELENDI', hedefTarih: dbTarih(t('2026-10-05')), ertelenenTarih: dbTarih(t('2026-10-01')) })
+    await hatirlatmaEkle({ baslik: 'ESKI-ERTELEME-GUN-ONCE', durum: 'ERTELENDI', hedefTarih: dbTarih(t('2026-10-07')), ertelenenTarih: dbTarih(t('2026-10-07')) })
+    await hatirlatmaEkle({ baslik: 'ESKI-ACIK', hedefTarih: dbTarih(t('2026-10-07')) })
+    await hatirlatmaEkle({ baslik: 'GORUNEN', hedefTarih: dbTarih(t('2026-10-16')) })
+    const ics = duzles((await takvimIcerigi(token, BUGUN))!)
+    expect(ics).not.toContain('ESKI-')
+    expect(ics).toContain('GORUNEN')
+    expect(ics.match(/BEGIN:VEVENT/g)).toHaveLength(1)
+  })
+
+  it('sınır etkinlik tarihine göre uygulanır: 2000 kayıttan fazlasında ertelenmiş kayıt yeni tarihinin sırasına girer, hedef sırasına göre kesilmez', async () => {
+    const kid = await yeniKullanici('sinir')
+    const token = await icsTokenUret(kid, TEST_BAGLAMI)
+    const ortak = { kural: 'H1', iliskiliTur: 'sistem', iliskiliId: 'x', aciklama: 'a', gorunurTarih: dbTarih(t('2026-10-01')), oncelik: 'NORMAL' as const }
+    await prisma.hatirlatma.createMany({
+      data: Array.from({ length: 2000 }, (_, i) => ({ ...ortak, anahtar: `TOPLU:${i}`, baslik: `TOPLU-${i}`, hedefTarih: dbTarih(t('2026-10-20')) })),
+    })
+    // Hedefi en uzak, ama etkinlik tarihi (ertelenen) en erken: ilk 2000 içinde kalmalı. Eski hedef sıralı kesimde dışarıda kalırdı.
+    await hatirlatmaEkle({ baslik: 'ERKEN-ERTELENEN', durum: 'ERTELENDI', hedefTarih: dbTarih(t('2027-06-01')), ertelenenTarih: dbTarih(t('2026-10-10')) })
+    const ics = (await takvimIcerigi(token, BUGUN))!
+    expect(ics.match(/BEGIN:VEVENT/g)).toHaveLength(2000)
+    const ilk = duzles(ics).split('BEGIN:VEVENT\r\n')[1]!
+    expect(ilk).toContain('ERKEN-ERTELENEN')
+    expect(ilk).toContain('DTSTART;VALUE=DATE:20261010\r\n')
   })
 
   it('H1 (taksit) tutarı akışa girmez; başlık ve sabit açıklama gider (spec §9: tutar panoda kalır)', async () => {
@@ -239,6 +276,8 @@ describe('hesap yaşam döngüsü takvim bağlantısını iptal eder', () => {
     expect(await takvimIcerigi(await icsTokenUret(kid, TEST_BAGLAMI), BUGUN)).not.toBeNull()
     const satir = await prisma.olayGunlugu.findFirstOrThrow({ where: { varlik: 'kullanici', varlikId: String(kid), eylem: 'PASIFLESTIR' } })
     expect(satir.sonra).toEqual({ degisenAlanlar: ['aktif', 'icsTokenHash'] })
+    expect(JSON.stringify(satir)).not.toContain(token)
+    expect(JSON.stringify(satir)).not.toContain(tokenOzeti(token))
   })
 
   it('şifre sıfırlama bağlantıyı siler; kullanıcı yenisini üretebilir; başkasınınki etkilenmez', async () => {
@@ -253,6 +292,9 @@ describe('hesap yaşam döngüsü takvim bağlantısını iptal eder', () => {
     expect(await takvimIcerigi(await icsTokenUret(kid, TEST_BAGLAMI), BUGUN)).not.toBeNull()
     const satir = await prisma.olayGunlugu.findFirstOrThrow({ where: { varlik: 'kullanici', varlikId: String(kid), eylem: 'SIFRE_SIFIRLA' } })
     expect(JSON.stringify(satir.sonra)).toContain('icsTokenHash')
+    // Denetim satırında alan adı vardır, ne eski token ne özeti.
+    expect(JSON.stringify(satir)).not.toContain(token)
+    expect(JSON.stringify(satir)).not.toContain(tokenOzeti(token))
   })
 })
 

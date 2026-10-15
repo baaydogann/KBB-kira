@@ -1,11 +1,10 @@
 import { randomBytes } from 'node:crypto'
 import { OTOMATIK_KURALLAR } from '@/core/hatirlatma'
 import { icsUret } from '@/core/ics'
-import { bugunIstanbul, gunEkle, karsilastir, type Tarih } from '@/core/tarih'
+import { bugunIstanbul, gunEkle, tarih as tarihMetni, type Tarih } from '@/core/tarih'
 import type { IslemBaglami } from '../baglam'
 import { prisma } from '../db'
 import { denetimKaydi } from '../denetim'
-import { dbTarih, tarihDb } from '../donustur'
 import { ortam } from '../env'
 import { tokenOzeti } from '../auth/oturum'
 
@@ -26,7 +25,7 @@ const MOTOR_KURALLARI: ReadonlySet<string> = new Set<string>([...OTOMATIK_KURALL
 
 const GENEL_ACIKLAMA = 'Ayrıntı için KBB Kira Takip uygulamasında hatırlatmayı açın.'
 
-/** Bu kadar gün önceye kadar hedefi olan açık kayıtlar akışta tutulur (geciken işler takvimde de görünsün). */
+/** Pencerenin geriye uzanımı: eşik = bugün − bu kadar gün (geciken işler takvimde de görünsün); kural için bkz. `takvimIcerigi`. */
 const GERI_GUN = 7
 const AZAMI_ETKINLIK = 2000
 
@@ -57,7 +56,11 @@ export function takvimUrl(token: string): string {
  * Eşleştirme sunulan tokenın HMAC özeti üzerinden benzersiz dizinle yapılır: özet tokenın önekini sızdırmaz, dolayısıyla karakter karakter
  * (zamanlama) karşılaştırması söz konusu değildir. Token günlüğe yazılmaz.
  *
- * Ertelenmiş kayıt, erteleme gününde geri döner (pano ile aynı): etkinlik tarihi ve 7 günlük pencere `ertelenenTarih ?? hedefTarih`e göre.
+ * Pencere ve etkinlik tarihi (`eşik` = bugün − 7 gün):
+ * - ACIK kayıt `hedefTarih >= eşik` ise girer ve hedef tarihinde görünür.
+ * - ERTELENDI kayıt `ertelenenTarih >= eşik` YA DA `hedefTarih >= eşik` ise girer. Etkinlik tarihi `ertelenenTarih >= eşik` ise ertelenen
+ *   tarih, değilse (erteleme eşikten eski ya da yok) hedef tarihidir: erteleme günü geçse de hedefi yaklaşan açık kayıt takvimden düşmez.
+ * Etkinlikler bu etkinlik tarihine, eşitlikte kimliğe göre sıralanır ve `AZAMI_ETKINLIK` sınırı sıralamadan SONRA (SQL'de) uygulanır.
  *
  * KVKK / spec §9: akışta yalnızca sözleşme no, taşınmaz kısa adı ve olay bulunur; tutar, kişi adı, TCKN, IBAN yok (bkz. `MOTOR_KURALLARI`).
  */
@@ -66,27 +69,26 @@ export async function takvimIcerigi(token: string, bugun: Tarih = bugunIstanbul(
   // Yalnızca aktiflik okunur: sifreHash gibi alanlar belleğe yüklenmesin.
   const k = await prisma.kullanici.findUnique({ where: { icsTokenHash: tokenOzeti(token) }, select: { aktif: true } })
   if (!k?.aktif) return null
-  const esik = dbTarih(gunEkle(bugun, -GERI_GUN))
-  const kayitlar = await prisma.hatirlatma.findMany({
-    where: {
-      OR: [
-        { durum: 'ACIK', hedefTarih: { gte: esik } },
-        { durum: 'ERTELENDI', OR: [{ ertelenenTarih: { gte: esik } }, { ertelenenTarih: null, hedefTarih: { gte: esik } }] },
-      ],
-    },
-    orderBy: [{ hedefTarih: 'asc' }, { id: 'asc' }],
-    take: AZAMI_ETKINLIK,
-  })
-  // Sıra etkinlik tarihine göre (ertelenmiş kayıtlar yeni tarihlerinde); eşitlikte kimlik.
-  const etkinlikler = kayitlar
-    .map((h) => ({ h, tarih: tarihDb(h.durum === 'ERTELENDI' ? (h.ertelenenTarih ?? h.hedefTarih) : h.hedefTarih) }))
-    .sort((a, b) => karsilastir(a.tarih, b.tarih) || a.h.id - b.h.id)
+  // Etkinlik tarihi kayda göre değiştiği için sıralama ve sınır SQL'de, hesaplanan tarih üzerinden yapılır (Prisma `orderBy` hesaplanmış
+  // sütun alamaz). Eşik 'YYYY-MM-DD' metni olarak bağlanır; `::date` dönüşümü oturum saat diliminden etkilenmez.
+  const esik = gunEkle(bugun, -GERI_GUN)
+  const kayitlar = await prisma.$queryRaw<{ anahtar: string; kural: string; baslik: string; aciklama: string; oncelik: string; tarih: string }[]>`
+    SELECT k.anahtar, k.kural, k.baslik, k.aciklama, k.oncelik::text AS oncelik, to_char(k.tarih, 'YYYY-MM-DD') AS tarih
+      FROM (
+        SELECT id, anahtar, kural, baslik, aciklama, oncelik,
+               CASE WHEN durum = 'ERTELENDI' AND ertelenen_tarih >= ${esik}::date THEN ertelenen_tarih ELSE hedef_tarih END AS tarih
+          FROM hatirlatma
+         WHERE (durum = 'ACIK' AND hedef_tarih >= ${esik}::date)
+            OR (durum = 'ERTELENDI' AND (ertelenen_tarih >= ${esik}::date OR hedef_tarih >= ${esik}::date))
+      ) AS k
+     ORDER BY k.tarih, k.id
+     LIMIT ${AZAMI_ETKINLIK}`
   return icsUret({
     takvimAdi: 'KBB Kira Takip',
     olusturma: new Date(),
-    etkinlikler: etkinlikler.map(({ h, tarih }) => ({
+    etkinlikler: kayitlar.map((h) => ({
       uid: `${h.anahtar}@kbb-kira`,
-      tarih,
+      tarih: tarihMetni(h.tarih),
       baslik: `[${h.oncelik}] ${h.baslik}`,
       aciklama: MOTOR_KURALLARI.has(h.kural) ? h.aciklama : GENEL_ACIKLAMA,
     })),
