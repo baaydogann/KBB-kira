@@ -6,6 +6,8 @@ export interface Hisse extends Kesir { kisiId: string }
 export interface HissePayi { kisiId: string; kurus: bigint }
 
 const AZAMI_PAYDA = 1_000_000
+const KIMLIK_DESENI = /^\d+$/
+const KIMLIK_HATASI = 'Malik kimlikleri benzersiz sayısal değer olmalı.'
 
 function ebob(a: bigint, b: bigint): bigint {
   let x = a < 0n ? -a : a
@@ -48,22 +50,30 @@ export function hisseyeDagit(toplamKurus: bigint, hisseler: readonly Hisse[]): S
   if (toplamKurus < 0n) {
     return hatali({ kod: 'GECERSIZ_GIRDI', mesaj: 'Dağıtılacak tutar negatif olamaz.' })
   }
+  const kimlikler: bigint[] = []
+  for (const h of hisseler) {
+    if (!KIMLIK_DESENI.test(h.kisiId)) {
+      return hatali({ kod: 'GECERSIZ_GIRDI', mesaj: KIMLIK_HATASI })
+    }
+    kimlikler.push(BigInt(h.kisiId))
+  }
+  if (new Set(kimlikler).size !== kimlikler.length) {
+    return hatali({ kod: 'GECERSIZ_GIRDI', mesaj: KIMLIK_HATASI })
+  }
   if (!hisseToplamiBirMi(hisseler)) {
     return hatali({ kod: 'HISSE_TOPLAMI_HATALI', mesaj: 'Hisselerin toplamı tam olarak 1 olmalı.' })
   }
   const satirlar = hisseler.map((h, sira) => {
     const carpim = toplamKurus * BigInt(h.pay)
     const q = BigInt(h.payda)
-    return { kisiId: h.kisiId, sira, taban: carpim / q, kalanPay: carpim % q, kalanPayda: q }
+    return { kisiId: h.kisiId, kimlik: kimlikler[sira]!, sira, taban: carpim / q, kalanPay: carpim % q, kalanPayda: q }
   })
   let artik = toplamKurus - satirlar.reduce((a, s) => a + s.taban, 0n)
   const sirali = [...satirlar].sort((a, b) => {
     const sol = a.kalanPay * b.kalanPayda
     const sag = b.kalanPay * a.kalanPayda
     if (sol !== sag) return sol > sag ? -1 : 1
-    const ia = BigInt(a.kisiId)
-    const ib = BigInt(b.kisiId)
-    if (ia !== ib) return ia < ib ? -1 : 1
+    if (a.kimlik !== b.kimlik) return a.kimlik < b.kimlik ? -1 : 1
     return a.sira - b.sira
   })
   const ek = new Set<number>()

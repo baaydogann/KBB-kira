@@ -58,6 +58,20 @@ describe('hisseyeDagit (Review Focus #5)', () => {
     const b = hisseyeDagit(100n, [h('1', 1, 2)])
     expect(!b.ok && b.hata.kod).toBe('HISSE_TOPLAMI_HATALI')
   })
+  it('sayısal olmayan veya boş kisiId hata döner (istisna fırlatmaz)', () => {
+    const a = hisseyeDagit(100n, [h('a', 1, 2), h('b', 1, 2)])
+    expect(!a.ok && a.hata.kod).toBe('GECERSIZ_GIRDI')
+    const b = hisseyeDagit(100n, [h('', 1, 2), h('0', 1, 2)])
+    expect(!b.ok && b.hata.kod).toBe('GECERSIZ_GIRDI')
+  })
+  it('tekrarlanan kisiId hata döner', () => {
+    const s = hisseyeDagit(100n, [h('1', 1, 2), h('1', 1, 2)])
+    expect(!s.ok && s.hata.kod).toBe('GECERSIZ_GIRDI')
+  })
+  it('sayısal değeri aynı olan kisiId (01 ve 1) tekrar sayılır', () => {
+    const s = hisseyeDagit(100n, [h('01', 1, 2), h('1', 1, 2)])
+    expect(!s.ok && s.hata.kod).toBe('GECERSIZ_GIRDI')
+  })
   it('özellik: toplam korunur ve her pay ideal değerden 1 kuruştan az sapar', () => {
     const agirliklar = fc.array(fc.integer({ min: 1, max: 1000 }), { minLength: 1, maxLength: 8 })
     fc.assert(fc.property(fc.bigInt({ min: 0n, max: 10n ** 15n }), agirliklar, (toplam, w) => {
