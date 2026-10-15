@@ -66,11 +66,12 @@ export function formatTL(x: Para | string, sembol = true): string {
 }
 
 export function formatOran(x: Para): string {
-  const metin = x.decimalPlaces() <= 2 ? x.toFixed(2) : x.toDecimalPlaces(4).toFixed()
+  const r = x.toDecimalPlaces(4)
+  const metin = r.decimalPlaces() <= 2 ? r.toFixed(2) : r.toFixed()
   return `%${metin.replace('.', ',')}`
 }
 
-const TL_GRUPLU = /^-?\d{1,3}(\.\d{3})+(,\d{1,2})?$/
+const TL_GRUPLU = /^-?[1-9]\d{0,2}(\.\d{3})+(,\d{1,2})?$/
 const TL_DUZ = /^-?\d+(,\d{1,2})?$/
 
 /** Türk biçimli tutar: "1.234,56", "1234,56", "1.234" (binlik). "1234.56" reddedilir. */

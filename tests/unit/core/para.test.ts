@@ -61,6 +61,12 @@ describe('formatOran', () => {
     expect(formatOran(para('29.3150'))).toBe('%29,315')
     expect(formatOran(para('25'))).toBe('%25,00')
   })
+  it('dört ondalığa yuvarlar, sonra biçimi seçer (5+ ondalıkta 2 ondalık minimumu korunur)', () => {
+    expect(formatOran(para('31.99999'))).toBe('%32,00')
+    expect(formatOran(para('29.00001'))).toBe('%29,00')
+    expect(formatOran(para('0.00001'))).toBe('%0,00')
+    expect(formatOran(para('12.34567'))).toBe('%12,3457')
+  })
 })
 
 describe('paraAyristir (Review Focus #4)', () => {
@@ -79,7 +85,7 @@ describe('paraAyristir (Review Focus #4)', () => {
     if (s.ok) expect(s.deger.toFixed(2)).toBe(beklenen)
   })
 
-  it.each(['1234.56', '1.234.56', '12,345', '1,234,56', '', 'abc', '1.23,45', '-'])(
+  it.each(['1234.56', '1.234.56', '12,345', '1,234,56', '', 'abc', '1.23,45', '-', '0.500', '01.234'])(
     '%s reddedilir (nokta-ondalık veya bozuk biçim)',
     (girdi) => {
       const s = paraAyristir(girdi)
