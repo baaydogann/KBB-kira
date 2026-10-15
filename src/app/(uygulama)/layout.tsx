@@ -3,6 +3,7 @@ import { kullaniciGerekli } from '@/server/auth/gerekli'
 import { AnaMenu } from '@/components/ana-menu'
 import { Dugme } from '@/components/ui/dugme'
 import { cikisAction } from '@/app/_lib/cikis-actions'
+import { araAction } from './actions'
 
 export const dynamic = 'force-dynamic'
 
@@ -12,7 +13,7 @@ export default async function UygulamaYerlesimi({ children }: { children: React.
     <div className="flex min-h-screen flex-col">
       <header className="flex items-center gap-4 border-b border-slate-200 bg-white px-4 py-2">
         <Link href="/" className="font-semibold text-marka">KBB Kira Takip</Link>
-        <form action="/ara" className="ml-4 flex-1">
+        <form action={araAction} className="ml-4 flex-1">
           <input name="q" type="search" placeholder="Sözleşme no, malik, ada/parsel ara" aria-label="Ara"
             className="w-full max-w-md rounded-md border border-slate-300 px-2.5 py-1.5 text-sm" />
         </form>

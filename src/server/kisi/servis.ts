@@ -93,6 +93,15 @@ export async function kisiKimlikIleBul(kimlik: string): Promise<number | null> {
   return k?.id ?? null
 }
 
+/**
+ * Tam eşleşmeyle IBAN'dan kişi kimliği (genel arama kutusu, IBAN'ı URL'e yazmadan bu yolla bulur). Girdi normalleştirilir
+ * (boşluksuz, büyük harf). Aynı IBAN birden çok kişide kayıtlıysa (ortak hesap) en küçük kişi kimliği döner.
+ */
+export async function kisiIbanIleBul(iban: string): Promise<number | null> {
+  const i = await prisma.iban.findFirst({ where: { iban: ibanNormalize(iban) }, orderBy: { kisiId: 'asc' }, select: { kisiId: true } })
+  return i?.kisiId ?? null
+}
+
 export async function kisiDetayi(id: number) {
   const k = await prisma.kisi.findUnique({
     where: { id },
