@@ -70,6 +70,16 @@ export function formSurum(f: FormData, ad = 'version'): number | undefined {
   return n
 }
 
+/**
+ * Rota parametresi (`[id]`) için kayıt kimliği: yalnızca ondalık rakamlardan oluşan, PostgreSQL INTEGER aralığındaki
+ * pozitif tamsayı; aksi halde null (sayfa 404 verir). `Number(x)` "1e3", "0x10", "" gibi girdileri sayıya çevirirdi.
+ */
+export function yolKimligi(deger: string): number | null {
+  if (!/^\d+$/.test(deger)) return null
+  const n = Number(deger)
+  return Number.isSafeInteger(n) && n >= 1 && n <= 2_147_483_647 ? n : null
+}
+
 export function formSecim(f: FormData, ad: string): boolean {
   return f.get(ad) === 'on' || f.get(ad) === 'true'
 }

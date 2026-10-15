@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { tarih } from '@/core/tarih'
-import { formDegerleri, formMetni, formSayi, formSecim, formSurum, hataDurumu } from '@/app/_lib/form'
+import { formDegerleri, formMetni, formSayi, formSecim, formSurum, hataDurumu, yolKimligi } from '@/app/_lib/form'
 import { BulunamadiHatasi, CakismaHatasi, IsKuraliHatasi } from '@/server/hata'
 import { ParametreYokHatasi } from '@/server/parametre/servis'
 
@@ -77,6 +77,21 @@ describe('formSurum', () => {
       })()
       expect(hata, JSON.stringify(v)).toBeInstanceOf(IsKuraliHatasi)
       expect(hata).toMatchObject({ kod: 'VERSION', message: 'Form sürümü geçersiz; sayfayı yenileyip tekrar deneyin.' })
+    }
+  })
+})
+
+describe('yolKimligi', () => {
+  it('rakamlardan oluşan pozitif INTEGER kimliklerini döner', () => {
+    expect(yolKimligi('1')).toBe(1)
+    expect(yolKimligi('42')).toBe(42)
+    expect(yolKimligi('007')).toBe(7)
+    expect(yolKimligi('2147483647')).toBe(2_147_483_647)
+  })
+
+  it('sıfır, aralık dışı ve Number(x) ile sayıya dönüşen çöp girdiyi null yapar', () => {
+    for (const v of ['0', '2147483648', '9'.repeat(400), '', ' ', ' 7', '7 ', '-1', '+5', '1.5', '1,5', '1e3', '0x10', 'abc', '١٢', 'Infinity', 'NaN']) {
+      expect(yolKimligi(v), JSON.stringify(v)).toBeNull()
     }
   })
 })
