@@ -7,10 +7,14 @@ import type { SozlesmeDurumu } from '@/generated/prisma'
  */
 export const SOZLESME_DURUMLARI: readonly SozlesmeDurumu[] = ['TASLAK', 'AKTIF', 'UZADI', 'FESHEDILDI', 'SONA_ERDI']
 
-/** Boşlukları atılmış 10/11 haneli rakam dizisi (VKN/TCKN) ya da `TR` + iki rakamla başlayan metin (IBAN). */
+/**
+ * Boşluk, nokta ve tire (her türlü) atıldıktan sonra metnin herhangi bir yerinde 10 ya da daha uzun ardışık rakam dizisi
+ * kalıyorsa (TCKN/VKN, ayraçlı ya da başka metinle yazılmış numara, çıplak BBAN) ya da metin `TR` + iki rakamla
+ * başlıyorsa (IBAN) kimlik benzeridir. Ada/parsel (`123/45`), tarih ve sözleşme no gibi kısa rakam dizileri değildir.
+ */
 export function kimlikBenzeriMi(q: string): boolean {
-  const s = q.replace(/\s+/g, '')
-  return /^\d{10,11}$/.test(s) || /^TR\d{2}/i.test(s)
+  const s = q.replace(/[\s.\-‐-―−]+/g, '')
+  return /\d{10}/.test(s) || /^TR\d{2}/i.test(s)
 }
 
 /**

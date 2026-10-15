@@ -1,8 +1,8 @@
 import Link from 'next/link'
 import { maskele } from '@/core/dogrulama'
 import { kullaniciGerekli } from '@/server/auth/gerekli'
-import { kimlikAramasi } from '@/server/kisi/arama'
 import { kisiGorunenAd, kisiListesi } from '@/server/kisi/servis'
+import { kimlikBenzeriMi } from '@/server/sozlesme/arama'
 import { SayfaBasligi } from '@/components/sayfa-basligi'
 import { DugmeLink } from '@/components/ui/dugme'
 import { Girdi } from '@/components/ui/alan'
@@ -14,14 +14,14 @@ import { kisiAraAction } from './actions'
 export default async function KisilerSayfasi({ searchParams }: { searchParams: Promise<{ q?: string | string[]; bulunamadi?: string | string[] }> }) {
   await kullaniciGerekli()
   const { q: ham, bulunamadi } = await searchParams
-  // TCKN/VKN adres satırında aranmaz (KVKK): kimlik numarası gibi bir `q` yok sayılır, arama kutusu POST eder.
-  const q = typeof ham === 'string' && kimlikAramasi(ham) === null ? ham : undefined
+  // TCKN/VKN/IBAN adres satırında aranmaz (KVKK): kimlik benzeri bir `q` yok sayılır, arama kutusu POST eder.
+  const q = typeof ham === 'string' && !kimlikBenzeriMi(ham) ? ham : undefined
   const liste = await kisiListesi(q)
   return (
     <>
       <SayfaBasligi baslik="Malikler ve hak sahipleri" eylemler={<DugmeLink href="/kisiler/yeni" tur="birincil">Yeni kişi</DugmeLink>} />
       <form action={kisiAraAction} className="mb-3"><Girdi name="q" type="search" defaultValue={q} aria-label="Kişi ara" placeholder="Ad, soyad, unvan, TCKN veya VKN" autoComplete="off" className="max-w-md" /></form>
-      {bulunamadi === '1' ? <div className="mb-3"><Uyari ton="uyari">Bu kimlik numarasıyla kayıtlı kişi bulunamadı.</Uyari></div> : null}
+      {bulunamadi === '1' ? <div className="mb-3"><Uyari ton="uyari">Bu kimlik numarasıyla kayıtlı kişi bulunamadı. Kimlik numarası yalnızca rakamlarla, başka metin olmadan girilmelidir.</Uyari></div> : null}
       <Tablo>
         <thead><tr><Th>Ad / unvan</Th><Th>Kimlik</Th><Th>Vergi statüsü</Th></tr></thead>
         <tbody className="divide-y divide-slate-100">

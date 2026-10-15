@@ -5,6 +5,7 @@ import type { IslemBaglami } from '../baglam'
 import { prisma } from '../db'
 import { denetimKaydi } from '../denetim'
 import { BulunamadiHatasi, CakismaHatasi, IsKuraliHatasi, benzersizIhlaliMi } from '../hata'
+import { ORTAK_IBAN_SINIRI } from './arama'
 import type { KisiGirdisi } from './sema'
 
 export function kisiGorunenAd(k: { tip: 'GERCEK' | 'TUZEL'; ad: string | null; soyad: string | null; unvan: string | null }): string {
@@ -94,12 +95,23 @@ export async function kisiKimlikIleBul(kimlik: string): Promise<number | null> {
 }
 
 /**
- * Tam eşleşmeyle IBAN'dan kişi kimliği (genel arama kutusu, IBAN'ı URL'e yazmadan bu yolla bulur). Girdi normalleştirilir
- * (boşluksuz, büyük harf). Aynı IBAN birden çok kişide kayıtlıysa (ortak hesap) en küçük kişi kimliği döner.
+ * Tam eşleşmeyle IBAN'dan kişi kimlikleri (genel arama kutusu, IBAN'ı URL'e yazmadan bu yolla bulur). Girdi
+ * normalleştirilir (boşluksuz, büyük harf). Aynı IBAN birden çok kişide kayıtlıysa (ortak hesap) hepsinin ayrık
+ * kimlikleri artan sırayla döner (en çok `ORTAK_IBAN_SINIRI`); yoksa boş dizi.
  */
-export async function kisiIbanIleBul(iban: string): Promise<number | null> {
-  const i = await prisma.iban.findFirst({ where: { iban: ibanNormalize(iban) }, orderBy: { kisiId: 'asc' }, select: { kisiId: true } })
-  return i?.kisiId ?? null
+export async function kisiIbanIleBul(iban: string): Promise<number[]> {
+  const satirlar = await prisma.iban.findMany({ where: { iban: ibanNormalize(iban) }, orderBy: { kisiId: 'asc' }, take: ORTAK_IBAN_SINIRI, select: { kisiId: true } })
+  return [...new Set(satirlar.map((s) => s.kisiId))]
+}
+
+/** Genel aramanın ortak IBAN listesi: yalnızca listede gösterilen alanlar (ad, unvan, TCKN/VKN; telefon ve adres yüklenmez). */
+export async function kisiListesiKimliklerle(idler: number[]) {
+  if (idler.length === 0) return []
+  return prisma.kisi.findMany({
+    where: { id: { in: idler } },
+    select: { id: true, tip: true, ad: true, soyad: true, unvan: true, tckn: true, vkn: true },
+    orderBy: [{ soyad: 'asc' }, { unvan: 'asc' }, { id: 'asc' }],
+  })
 }
 
 export async function kisiDetayi(id: number) {

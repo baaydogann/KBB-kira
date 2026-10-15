@@ -1,6 +1,6 @@
 import fc from 'fast-check'
 import { describe, expect, it, vi } from 'vitest'
-import { genelAramaHedefi, kimlikAramasi, kisiAramaHedefi } from '@/server/kisi/arama'
+import { genelAramaHedefi, kimlikAramasi, kisiAramaHedefi, kisiKimlikListesi, ORTAK_IBAN_SINIRI } from '@/server/kisi/arama'
 
 const BULUNAN = '10000000146'
 const bul = vi.fn(async (kimlik: string) => (kimlik === BULUNAN ? 7 : null))
@@ -44,6 +44,14 @@ describe('kisiAramaHedefi', () => {
     expect(bul).not.toHaveBeenCalled()
   })
 
+  it('kimlik numarası içeren ya da IBAN benzeri girdi (metinli, tireli, noktalı) adrese yazılmaz ve aranmaz', async () => {
+    bul.mockClear()
+    for (const q of ['Ahmet 10000000146', '100-000-001-46', '100.000.001.46', 'TR330006100519786457841326', '000610000000000000000006']) {
+      expect(await kisiAramaHedefi(q, bul), q).toBe('/kisiler?bulunamadi=1')
+    }
+    expect(bul).not.toHaveBeenCalled()
+  })
+
   it('boş aramada listeye döner', async () => {
     expect(await kisiAramaHedefi('', bul)).toBe('/kisiler')
     expect(await kisiAramaHedefi('   ', bul)).toBe('/kisiler')
@@ -64,10 +72,10 @@ describe('kisiAramaHedefi', () => {
 
 describe('genelAramaHedefi', () => {
   const kimlikBul = vi.fn(async (kimlik: string) => (kimlik === BULUNAN ? 7 : null))
-  const ibanBul = vi.fn(async (iban: string) => (iban === 'TR330006100519786457841326' ? 9 : null))
+  const ibanBul = vi.fn(async (iban: string) => (iban === 'TR330006100519786457841326' ? [9] : iban === 'TR330006100519786457841300' ? [3, 7] : []))
   const bul = { kimlik: kimlikBul, iban: ibanBul }
 
-  it('bulunan TCKN/VKN ve IBAN kişi sayfasına gider; arama değeri normalleştirilerek aranır', async () => {
+  it('bulunan TCKN/VKN ve tek kişiye ait IBAN kişi sayfasına gider; arama değeri normalleştirilerek aranır', async () => {
     kimlikBul.mockClear()
     ibanBul.mockClear()
     expect(await genelAramaHedefi(' 100 000 001 46 ', bul)).toBe('/kisiler/7')
@@ -76,11 +84,25 @@ describe('genelAramaHedefi', () => {
     expect(ibanBul).toHaveBeenCalledExactlyOnceWith('TR330006100519786457841326')
   })
 
+  it('ortak IBAN (birden çok kişi) kişi listesi adresine gider; adreste yalnızca kişi kimlikleri vardır', async () => {
+    expect(await genelAramaHedefi('TR33 0006 1005 1978 6457 8413 00', bul)).toBe('/ara?kisiler=3,7')
+  })
+
   it('bulunamayan kimlik ve IBAN bildirim adresine gider', async () => {
     for (const q of ['1234567890', '99999999999', 'TR330006100519786457841399', 'TR12']) expect(await genelAramaHedefi(q, bul), q).toBe('/ara?bulunamadi=1')
   })
 
-  it('sıradan aramayı kodlanmış q ile yönlendirir, kimlik aramasına başvurmaz', async () => {
+  it('kimlik numarası içeren ama temiz olmayan girdi (metinli, tireli, noktalı, çıplak BBAN) aranmaz ve bildirim adresine gider', async () => {
+    kimlikBul.mockClear()
+    ibanBul.mockClear()
+    for (const q of ['Ahmet 10000000146', '100-000-001-46', '100.000.001.46', '000610000000000000000006']) {
+      expect(await genelAramaHedefi(q, bul), q).toBe('/ara?bulunamadi=1')
+    }
+    expect(kimlikBul).not.toHaveBeenCalled()
+    expect(ibanBul).not.toHaveBeenCalled()
+  })
+
+  it('ada/parsel ve sıradan aramayı kodlanmış q ile yönlendirir, kimlik aramasına başvurmaz', async () => {
     kimlikBul.mockClear()
     ibanBul.mockClear()
     expect(await genelAramaHedefi('  123/45 ', bul)).toBe('/ara?q=123%2F45')
@@ -91,16 +113,38 @@ describe('genelAramaHedefi', () => {
     expect(ibanBul).not.toHaveBeenCalled()
   })
 
-  it('özellik: 10/11 haneli numara (boşluklu da) ve IBAN benzeri girdi bulunsa da bulunmasa da hiçbir hedef adreste geçmez', async () => {
-    const numara = fc.array(fc.integer({ min: 0, max: 9 }), { minLength: 10, maxLength: 11 }).map((r) => r.join(''))
-    const bosluklu = numara.chain((n) => fc.array(fc.boolean(), { minLength: n.length, maxLength: n.length }).map((b) => [...n].map((c, i) => (b[i] ? ` ${c}` : c)).join('')))
+  it('özellik: 10 ya da daha uzun rakam dizisi içeren (boşluk, nokta, tire serpiştirilmiş) ve IBAN benzeri girdi hiçbir hedef adreste geçmez', async () => {
+    const rakamlar = fc.array(fc.integer({ min: 0, max: 9 }), { minLength: 10, maxLength: 26 }).map((r) => r.join(''))
+    const ayracli = rakamlar.chain((n) => fc.array(fc.constantFrom('', ' ', '-', '.'), { minLength: n.length, maxLength: n.length }).map((a) => [...n].map((c, i) => `${c}${a[i]}`).join('')))
+    const metinli = fc.tuple(fc.constantFrom('', 'Ahmet ', 'x-'), ayracli).map(([on, n]) => `${on}${n}`)
     const iban = fc.array(fc.integer({ min: 0, max: 9 }), { minLength: 2, maxLength: 24 }).map((r) => `TR${r.join('')}`)
-    await fc.assert(fc.asyncProperty(fc.oneof(bosluklu, iban), fc.boolean(), async (q, bulunur) => {
-      const hedef = await genelAramaHedefi(q, { kimlik: async () => (bulunur ? 7 : null), iban: async () => (bulunur ? 7 : null) })
-      const ham = q.replace(/\s+/g, '')
-      expect(hedef).toBe(bulunur ? '/kisiler/7' : '/ara?bulunamadi=1')
+    await fc.assert(fc.asyncProperty(fc.oneof(metinli, iban), fc.constantFrom<number[]>([], [7], [3, 7]), async (q, bulunan) => {
+      const hedef = await genelAramaHedefi(q, { kimlik: async () => (bulunan[0] ?? null), iban: async () => bulunan })
+      const ham = q.replace(/[\s.-]+/g, '')
+      expect(hedef).toMatch(/^\/(kisiler\/\d{1,2}|ara\?bulunamadi=1|ara\?kisiler=3,7)$/)
       expect(hedef).not.toContain(ham.slice(0, 6))
       expect(hedef).not.toContain(ham.slice(-6))
-    }), { numRuns: 200 })
+    }), { numRuns: 300 })
+  })
+})
+
+describe('kisiKimlikListesi', () => {
+  it('virgülle ayrılmış pozitif tamsayı kimlikleri sırayla, tekrarsız döndürür', () => {
+    expect(kisiKimlikListesi('3,7')).toEqual([3, 7])
+    expect(kisiKimlikListesi('7,3,7')).toEqual([7, 3])
+    expect(kisiKimlikListesi('5')).toEqual([5])
+  })
+
+  it('bozuk ya da güvenilmez girdide hiçbir kimlik döndürmez', () => {
+    const bozuklar: (string | string[] | undefined)[] = [
+      undefined, '', ',', '3,', ',3', '3,,7', '3, 7', '0', '-1', '1e3', '0x10', '3.5', 'abc', '3,x', '2147483648', '99999999999999999999', ['3', '7'],
+    ]
+    for (const ham of bozuklar) expect(kisiKimlikListesi(ham), String(ham)).toEqual([])
+    expect(kisiKimlikListesi('2147483647')).toEqual([2147483647])
+  })
+
+  it('en çok ORTAK_IBAN_SINIRI kimlik döndürür', () => {
+    const uzun = Array.from({ length: ORTAK_IBAN_SINIRI + 15 }, (_, i) => i + 1)
+    expect(kisiKimlikListesi(uzun.join(','))).toEqual(uzun.slice(0, ORTAK_IBAN_SINIRI))
   })
 })

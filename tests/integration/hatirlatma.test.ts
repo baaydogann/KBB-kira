@@ -8,6 +8,7 @@ import {
   hatirlatmaErtele, hatirlatmalariUretVeKaydet, hatirlatmaTamamla, hatirlatmaVerisiYukle, panoVerisi,
 } from '@/server/hatirlatma/servis'
 import { sozlesmeAktiflestir, sozlesmeTaslakKaydet } from '@/server/sozlesme/servis'
+import { malikleriDegistir } from '@/server/sozlesme/yasam-dongusu'
 import { TEST_BAGLAMI, temizle } from './yardimci'
 import { girdi, hazirlik, type Hazirlik } from './sozlesme-yardimci'
 
@@ -151,6 +152,62 @@ describe('hatırlatma üretimi — ezilmeyen kayıtlar', () => {
   })
 })
 
+describe('hatırlatma üretimi — malikler ve eşzamanlılık', () => {
+  const veri = (bugun = BUGUN) => prisma.$transaction((tx) => hatirlatmaVerisiYukle(tx, bugun))
+
+  async function ileriTarihliMalikDegisikligi() {
+    const id = await sozlesme()
+    const s = await prisma.sozlesme.findUniqueOrThrow({ where: { id } })
+    await malikleriDegistir(id, s.version, {
+      tarih: t('2026-12-01'), malikler: [{ kisiId: h.kisiB, pay: 1, payda: 1, ibanId: h.ibanB, vekilKisiId: null }],
+    }, TEST_BAGLAMI, BUGUN)
+    // Bugünkü malik A'nın ödeme IBAN'ı yok; ileride gelecek malik B'ninki tam.
+    await prisma.sozlesmeMalik.updateMany({ where: { sozlesmeId: id, kisiId: h.kisiA }, data: { ibanId: null } })
+    return id
+  }
+
+  it('ileri tarihli malik değişikliğinde bugünün malikinin eksik IBAN bilgisi hâlâ H12 üretir; hisse toplamı bozuk sayılmaz', async () => {
+    const id = await ileriTarihliMalikDegisikligi()
+    const eksikler = (await veri()).sozlesmeler.find((x) => x.id === String(id))!.eksikler
+    expect(eksikler).toContain('IBAN_YOK')
+    expect(eksikler).not.toContain('HISSE_TOPLAMI')
+    await uret()
+    const anahtarlar = (await prisma.hatirlatma.findMany({ where: { sozlesmeId: id } })).map((k) => k.anahtar)
+    expect(anahtarlar).toContain(`H12:sozlesme:${id}:IBAN_YOK`)
+    expect(anahtarlar).not.toContain(`H12:sozlesme:${id}:HISSE_TOPLAMI`)
+  })
+
+  it('değişiklik tarihi gelince eski malik değerlendirmeden çıkar; yeni malikin IBAN bilgisi tam olduğundan eksik kalmaz', async () => {
+    const id = await ileriTarihliMalikDegisikligi()
+    const eksikler = (await veri(t('2026-12-05'))).sozlesmeler.find((x) => x.id === String(id))!.eksikler
+    expect(eksikler).not.toContain('IBAN_YOK')
+    expect(eksikler).not.toContain('HISSE_TOPLAMI')
+  })
+
+  it('henüz başlamamış (yenileme) sözleşmede eksik veri sözleşmenin ilk günündeki maliklere göre değerlendirilir', async () => {
+    const id = await sozlesmeTaslakKaydet(girdi(h, { baslangic: '2027-01-01', bitis: '2027-12-31', imzaTarihi: '2026-10-01', onayBelgesiTarihi: '2026-09-15' }), TEST_BAGLAMI)
+    await sozlesmeAktiflestir(id, 0, TEST_BAGLAMI, BUGUN)
+    expect((await veri()).sozlesmeler.find((x) => x.id === String(id))!.eksikler).toEqual(['SOZLESME_PDF_YOK'])
+  })
+
+  it('eşzamanlı üretimler hata vermez, yinelenen anahtar bırakmaz ve tek çalıştırmayla aynı kayıt kümesini üretir', async () => {
+    await sozlesme()
+    const ozet = async () => (await prisma.hatirlatma.findMany({ orderBy: { anahtar: 'asc' } })).map((k) => [k.anahtar, k.kural, k.durum, k.oncelik, k.baslik, k.aciklama])
+    await uret()
+    const tek = await ozet()
+    expect(tek.length).toBeGreaterThan(0)
+    // Yarış zamanlamaya bağlıdır (bazı turlarda ikinci üretim ilkinin işlemi bittikten sonra okur): birkaç tur ve dört eşzamanlı üretimle denenir.
+    for (let tur = 0; tur < 5; tur++) {
+      await prisma.hatirlatma.deleteMany()
+      const sonuclar = await Promise.all([uret(), uret(), uret(), uret()])
+      const eszamanli = await ozet()
+      expect(new Set(eszamanli.map((r) => r[0])).size).toBe(eszamanli.length)
+      expect(sonuclar.reduce((toplam, r) => toplam + r.yeni, 0)).toBe(eszamanli.length)
+      expect(eszamanli).toEqual(tek)
+    }
+  })
+})
+
 describe('tamamla ve ertele', () => {
   async function acikKayit() {
     const id = await sozlesme()
@@ -224,6 +281,28 @@ describe('pano', () => {
     const oncelikler = listeler.tumu.map((s) => sira[s.oncelik])
     expect(oncelikler).toEqual([...oncelikler].sort((a, b) => a - b))
   })
+
+  it('ertelemesi bugün biten kayıt hedefi uzak olsa da Bugün sekmesinde yeniden görünür', async () => {
+    const id = await sozlesme()
+    const kayit = await prisma.hatirlatma.create({
+      data: {
+        anahtar: `H7:sozlesme:${id}:2027-06-01`, kural: 'H7', iliskiliTur: 'sozlesme', iliskiliId: String(id), sozlesmeId: id,
+        baslik: '5 yıllık kira tespit dönemi', aciklama: 'emsal araştırması', hedefTarih: new Date('2027-06-01'),
+        gorunurTarih: new Date('2026-10-01'), oncelik: 'NORMAL', kararGerekli: false,
+      },
+    })
+    await hatirlatmaErtele(kayit.id, t('2026-10-20'), TEST_BAGLAMI, BUGUN)
+    const bugunSatir = async (gun: ReturnType<typeof t>) => (await panoVerisi(gun)).listeler.bugun.find((x) => x.id === kayit.id)
+    expect(await bugunSatir(t('2026-10-19'))).toBeUndefined() // erteleme sürüyor: hiçbir listede yok
+    expect((await panoVerisi(t('2026-10-19'))).listeler.tumu.some((x) => x.id === kayit.id)).toBe(false)
+    expect(await bugunSatir(t('2026-10-20'))).toMatchObject({ id: kayit.id, ertelenenTarih: '2026-10-20' })
+    expect((await panoVerisi(t('2026-10-20'))).listeler.tumu.some((x) => x.id === kayit.id)).toBe(true)
+    expect(await bugunSatir(t('2026-10-21'))).toBeUndefined() // ertelemenin bittiği günü geçince Bugün'den düşer, Tümü'nde kalır
+    expect((await panoVerisi(t('2026-10-21'))).listeler.tumu.some((x) => x.id === kayit.id)).toBe(true)
+    // Ertelenmemiş satırın ertelenenTarih'i null'dır.
+    const baska = (await panoVerisi(t('2026-10-20'))).listeler.tumu.find((x) => x.id !== kayit.id)
+    if (baska) expect(baska.ertelenenTarih).toBeNull()
+  })
 })
 
 describe('genel arama yönlendirmesi', () => {
@@ -243,6 +322,25 @@ describe('genel arama yönlendirmesi', () => {
 
   it('bulunamayan kimlik ve IBAN bildirim adresine gider; adreste değer yoktur', async () => {
     for (const q of ['99999999999', '1234567890', 'TR330006100519786457841326', 'tr33 0006 1005 1978 6457 8413 26', 'TR12']) {
+      const hedef = await genelAramaHedefi(q, bul)
+      expect(hedef, q).toBe('/ara?bulunamadi=1')
+    }
+  })
+
+  it('aynı IBAN birden çok kişide kayıtlıysa kişi listesi adresine gider; adreste yalnızca kişi kimlikleri vardır', async () => {
+    const iban = await prisma.iban.findUniqueOrThrow({ where: { id: h.ibanA } })
+    await prisma.iban.create({ data: { kisiId: h.kisiB, iban: iban.iban } })
+    expect(await kisiIbanIleBul(iban.iban)).toEqual([h.kisiA, h.kisiB])
+    const hedef = await genelAramaHedefi(iban.iban.toLowerCase(), bul)
+    expect(hedef).toBe(`/ara?kisiler=${h.kisiA},${h.kisiB}`)
+    expect(hedef).not.toContain(iban.iban.slice(4, 12))
+  })
+
+  it('"Ahmet 10000000146", tireli ve noktalı numara ya da çıplak BBAN adrese yazılmaz; çözülmez', async () => {
+    const kisi = await prisma.kisi.findUniqueOrThrow({ where: { id: h.kisiA } })
+    const tckn = kisi.tckn!
+    const bban = (await prisma.iban.findUniqueOrThrow({ where: { id: h.ibanA } })).iban.slice(4)
+    for (const q of [`Ahmet ${tckn}`, `${tckn.slice(0, 3)}-${tckn.slice(3, 6)}-${tckn.slice(6, 9)}-${tckn.slice(9)}`, `${tckn.slice(0, 3)}.${tckn.slice(3, 6)}.${tckn.slice(6, 9)}.${tckn.slice(9)}`, bban]) {
       const hedef = await genelAramaHedefi(q, bul)
       expect(hedef, q).toBe('/ara?bulunamadi=1')
     }

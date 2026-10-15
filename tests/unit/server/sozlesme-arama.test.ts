@@ -3,14 +3,17 @@ import { describe, expect, it } from 'vitest'
 import { kimlikBenzeriMi, sozlesmeAramaHedefi } from '@/server/sozlesme/arama'
 
 describe('kimlikBenzeriMi', () => {
-  it('boşlukları atılmış 10/11 haneli rakam dizisini ve TR+2 rakamla başlayan IBAN\'ı kimlik benzeri sayar', () => {
-    for (const q of ['10000000146', ' 100 000 001 46 ', '1234567890', 'TR330006100519786457841326', 'tr33 0006 1005 1978 6457 8413 26', 'TR33']) {
+  it('boşluk, nokta ve tire atıldıktan sonra 10 ya da daha uzun rakam dizisi içeren girdiyi ve TR+2 rakamla başlayan IBAN\'ı kimlik benzeri sayar', () => {
+    for (const q of [
+      '10000000146', ' 100 000 001 46 ', '1234567890', 'TR330006100519786457841326', 'tr33 0006 1005 1978 6457 8413 26', 'TR33',
+      'Ahmet 10000000146', '100-000-001-46', '100.000.001.46', '100 - 000.001-46', '123456789012', '12345-67890', '000610000000000000000006',
+    ]) {
       expect(kimlikBenzeriMi(q), q).toBe(true)
     }
   })
 
-  it('sözleşme no ve taşınmaz adı gibi sıradan aramaları kimlik saymaz', () => {
-    for (const q of ['', 'MRM-001', '2026', '123456789', '123456789012', 'Arsa B', 'TRX1', 'Hizmet Binası', '12345-67890']) {
+  it('sözleşme no, tarih ve ada/parsel gibi sıradan aramaları kimlik saymaz (10 haneden kısa rakam dizileri)', () => {
+    for (const q of ['', 'MRM-001', '2026', '123456789', 'Arsa B', 'TRX1', 'Hizmet Binası', '123/45', '123.45', '2026-01-15', '1234 5678']) {
       expect(kimlikBenzeriMi(q), q).toBe(false)
     }
   })

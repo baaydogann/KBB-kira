@@ -29,7 +29,8 @@ export async function hatirlatmaVerisiYukle(tx: Tx, bugun: Tarih): Promise<Hatir
     include: {
       tasinmaz: true,
       kiraDonemleri: { orderBy: { baslangic: 'desc' }, take: 1 },
-      malikler: { where: { gecerlilikBitis: null }, include: { kisi: true, iban: true } },
+      // Bitişi bugünden sonra olan (ileri tarihli malik değişikliğinde hâlâ geçerli olan) maliklerle bitişi olmayanlar.
+      malikler: { where: { OR: [{ gecerlilikBitis: null }, { gecerlilikBitis: { gte: dbTarih(bugun) } }] }, include: { kisi: true, iban: true } },
     },
   })
   const ids = sozlesmeler.map((s) => s.id)
@@ -50,16 +51,20 @@ export async function hatirlatmaVerisiYukle(tx: Tx, bugun: Tarih): Promise<Hatir
     bugun, tatiller, ayarlar,
     sozlesmeler: sozlesmeler.map((s) => {
       const eksikler: EksikVeri[] = []
-      if (s.malikler.some((m) => !m.iban || !m.iban.aktif)) eksikler.push('IBAN_YOK')
-      const bugunGecerli = s.malikler.filter((m) => icindeMi(bugun, { baslangic: tarihDb(m.gecerlilikBaslangic), bitis: null }))
-      if (!hisseToplamiBirMi(bugunGecerli.length ? bugunGecerli : s.malikler)) eksikler.push('HISSE_TOPLAMI')
+      // Eksik veri, bugünün maliklerine göre değerlendirilir: ileri tarihli değişiklikte gelecek malik henüz sayılmaz, bugünkü malik sayılır.
+      // Henüz başlamamış (ör. yenileme) sözleşmede "bugün" sözleşmenin ilk günüdür.
+      const baslangic = tarihDb(s.baslangic)
+      const gun = karsilastir(bugun, baslangic) < 0 ? baslangic : bugun
+      const bugunku = s.malikler.filter((m) => icindeMi(gun, { baslangic: tarihDb(m.gecerlilikBaslangic), bitis: tarihDbOpt(m.gecerlilikBitis) }))
+      if (bugunku.some((m) => !m.iban || !m.iban.aktif)) eksikler.push('IBAN_YOK')
+      if (!hisseToplamiBirMi(bugunku)) eksikler.push('HISSE_TOPLAMI')
       if (!pdfVar.has(s.id)) eksikler.push('SOZLESME_PDF_YOK')
-      if (s.malikler.some((m) => statuler[m.kisi.vergiStatusu].teyitGerekli && !m.kisi.statuTeyitli)) eksikler.push('STATU_TEYIT')
+      if (bugunku.some((m) => statuler[m.kisi.vergiStatusu].teyitGerekli && !m.kisi.statuTeyitli)) eksikler.push('STATU_TEYIT')
       if (!s.onayBelgesiNo) eksikler.push('ONAY_BELGESI_YOK')
       return {
         id: String(s.id), no: s.sozlesmeNo, kisaAd: s.tasinmaz.kisaAd, tasinmazTuru: s.tasinmaz.tur,
-        baslangic: tarihDb(s.baslangic), bitis: tarihDbOpt(s.bitis), ilkKiraBaslangici: tarihDb(s.ilkKiraBaslangici),
-        sonKiraDonemiBaslangici: s.kiraDonemleri[0] ? tarihDb(s.kiraDonemleri[0].baslangic) : tarihDb(s.baslangic),
+        baslangic, bitis: tarihDbOpt(s.bitis), ilkKiraBaslangici: tarihDb(s.ilkKiraBaslangici),
+        sonKiraDonemiBaslangici: s.kiraDonemleri[0] ? tarihDb(s.kiraDonemleri[0].baslangic) : baslangic,
         uzamaSayisi: s.uzamaSayisi, artisKurali: s.artisKurali, artisPeriyoduAy: s.artisPeriyoduAy, eksikler,
       }
     }),
@@ -183,6 +188,8 @@ export interface PanoSatiri {
   baslik: string
   aciklama: string
   hedef: Tarih
+  /** Ertelenmiş kaydın erteleme bitiş günü (bugüne kadar ertelenmişse bugün); ertelenmemişse null. */
+  ertelenenTarih: Tarih | null
   oncelik: Oncelik
   kararGerekli: boolean
 }
@@ -202,13 +209,14 @@ export async function panoVerisi(bugun: Tarih = bugunIstanbul()): Promise<PanoVe
   const satirlar: PanoSatiri[] = kayitlar
     .map((k) => ({
       id: k.id, kural: k.kural, iliskiliTur: k.iliskiliTur, sozlesmeId: k.sozlesmeId, baslik: k.baslik, aciklama: k.aciklama,
-      hedef: tarihDb(k.hedefTarih), oncelik: k.oncelik, kararGerekli: k.kararGerekli,
+      hedef: tarihDb(k.hedefTarih), ertelenenTarih: tarihDbOpt(k.ertelenenTarih), oncelik: k.oncelik, kararGerekli: k.kararGerekli,
     }))
     .sort((a, b) => SIRA[a.oncelik] - SIRA[b.oncelik] || karsilastir(a.hedef, b.hedef) || a.id - b.id)
   const hafta = gunEkle(bugun, 7)
   const listeler: Record<PanoSekmesi, PanoSatiri[]> = {
     gecikmis: satirlar.filter((s) => karsilastir(s.hedef, bugun) < 0),
-    bugun: satirlar.filter((s) => s.hedef === bugun),
+    // Erteleme bugün biten kayıt hedefi uzak olsa da Bugün'de yeniden görünür: hedefi yaklaşana kadar başka listede olmazdı.
+    bugun: satirlar.filter((s) => s.hedef === bugun || s.ertelenenTarih === bugun),
     hafta: satirlar.filter((s) => karsilastir(s.hedef, bugun) > 0 && karsilastir(s.hedef, hafta) <= 0),
     karar: satirlar.filter((s) => s.kararGerekli),
     tumu: satirlar,
