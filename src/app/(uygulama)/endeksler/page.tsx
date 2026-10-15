@@ -8,7 +8,7 @@ import { Rozet } from '@/components/ui/rozet'
 import { Tablo, Td, Th } from '@/components/ui/tablo'
 import { Uyari } from '@/components/ui/uyari'
 import { OranMetni } from '@/components/para'
-import { ElleGirisFormu, OnayFormu } from './endeks-formlari'
+import { ElleGirisFormu, OnayBekleyenleri, OnayFormu } from './endeks-formlari'
 
 const SERI_ADI: Record<OranSerisi, string> = {
   TUFE_12AY_ORT: 'TÜFE 12 ay ort. (tavan)', TUFE_YILLIK: 'TÜFE yıllık', YIUFE_12AY_ORT: 'Yİ-ÜFE 12 ay ort.', YIUFE_YILLIK: 'Yİ-ÜFE yıllık',
@@ -22,18 +22,16 @@ export default async function EndekslerSayfasi() {
       <SayfaBasligi baslik="Endeksler" aciklama="TÜİK oranları her ayın 3'ünde yayımlanır. EVDS'ten gelen değer TÜİK bülteniyle karşılaştırılıp onaylanmadan hiçbir hesapta kullanılmaz." />
       <div className="space-y-4">
         <Kart baslik="Onay bekleyenler">
-          {bekleyen.length === 0 ? <p className="text-sm text-slate-600">Onay bekleyen endeks yok.</p> : (
-            <div className="space-y-3">
-              {bekleyen.map((e) => (
-                <div key={e.id} className="rounded border border-slate-200 p-3">
-                  <p className="mb-2 text-sm">
-                    <strong>{SERI_ADI[e.seri]}</strong> — {ayAdi({ yil: e.yil, ay: e.ay })}: EVDS hesabı <strong><OranMetni deger={e.deger.toString()} /></strong> ({e.evdsSeriKodu})
-                  </p>
-                  <OnayFormu id={e.id} deger={e.deger.toString()} />
-                </div>
-              ))}
-            </div>
-          )}
+          <OnayBekleyenleri>
+            {bekleyen.length === 0 ? <p className="text-sm text-slate-600">Onay bekleyen endeks yok.</p> : bekleyen.map((e) => (
+              <div key={e.id} className="rounded border border-slate-200 p-3">
+                <p className="mb-2 text-sm">
+                  <strong>{SERI_ADI[e.seri]}</strong> — {ayAdi({ yil: e.yil, ay: e.ay })}: EVDS hesabı <strong><OranMetni deger={e.deger.toString()} /></strong> ({e.evdsSeriKodu})
+                </p>
+                <OnayFormu id={e.id} deger={e.deger.toString()} />
+              </div>
+            ))}
+          </OnayBekleyenleri>
         </Kart>
         <Kart baslik="Elle giriş (EVDS'e ulaşılamadığında)">
           <Uyari ton="uyari">Elle girilen değer hemen onaylı olur ve sonradan değiştirilemez; girmeden önce TÜİK bültenini kontrol edin.</Uyari>

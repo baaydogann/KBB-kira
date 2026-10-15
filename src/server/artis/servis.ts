@@ -23,6 +23,9 @@ const METIN_SINIRI = 500
 
 const yururlukteMi = (durum: string): boolean => durum === 'AKTIF' || durum === 'UZADI'
 
+/** Henüz onaylanmamış (hâlâ onaya konu olabilen) artış durumları. */
+const ACIK_ARTIS_DURUMLARI: ('BEKLEMEDE' | 'HESAPLANDI')[] = ['BEKLEMEDE', 'HESAPLANDI']
+
 /**
  * Sözleşme satır kilidi (`taksitPlaniniGuncelle` ile aynı kilit; F2 paket kodu da bunu almalı). Kira dönemi, taksit ya da artış
  * yazan her işlemin İLK ifadesidir: alt satır eklemeden (kira_donemi → FOR KEY SHARE) ya da sürüm artırmadan önce alınmazsa
@@ -58,8 +61,9 @@ function bekleyenDegismedi(
 /**
  * Bir sözleşmenin sıradaki artışını hesaplar. Sözleşme satırı önce kilitlenir, sonra yeniden okunur: aday listesi kilitsiz
  * okunduğundan bayat olabilir (araya giren fesih/onay/bedel değişikliği), eşzamanlı iki hesap aynı artışı iki kez oluşturamaz.
+ * `izleyici.donem`: hesaplanan artışın dönem başlangıcı (biliniyorsa); hata hatırlatmasının anahtarı için çağırana ulaşır.
  */
-async function sozlesmeArtisiniHesapla(tx: Tx, sozlesmeId: number, o: HesapOrtami): Promise<ArtisSonucu['durum'] | null> {
+async function sozlesmeArtisiniHesapla(tx: Tx, sozlesmeId: number, o: HesapOrtami, izleyici: { donem: Tarih | null }): Promise<ArtisSonucu['durum'] | null> {
   await sozlesmeyiKilitle(tx, sozlesmeId)
   const s = await tx.sozlesme.findUnique({
     where: { id: sozlesmeId },
@@ -73,6 +77,7 @@ async function sozlesmeArtisiniHesapla(tx: Tx, sozlesmeId: number, o: HesapOrtam
   const d = artisTarihleri({ ilkKiraBaslangici: tarihDb(s.ilkKiraBaslangici), periyotAy: s.artisPeriyoduAy, sonTarih: son })
     .find((x) => karsilastir(x, sonKd.baslangic) > 0)
   if (d === undefined) return null
+  izleyici.donem = d
   const mevcut = s.artislar.find((a) => tarihDb(a.donemBaslangic) === d)
   if (mevcut && mevcut.durum !== 'BEKLEMEDE') return null
   const onceki = kd.find((k) => icindeMi(gunEkle(d, -1), { baslangic: k.baslangic, bitis: k.bitis }))
@@ -118,10 +123,31 @@ async function sozlesmeArtisiniHesapla(tx: Tx, sozlesmeId: number, o: HesapOrtam
   return sonuc.durum
 }
 
+/**
+ * Hesaplanamayan artış için karar gerektiren KRITIK hatırlatma (`uzamaHatasiniBildir` ile aynı kalıp). Anahtar sözleşmeyi ve
+ * artışın dönem başlangıcını taşır; satır varsa yalnızca ileti güncellenir (kullanıcı kapatmış ya da ertelemiş olabilir).
+ * İleti Türkçe iş kuralı iletisidir (kişisel veri içermez).
+ */
+async function artisHesapHatasiniBildir(tx: Tx, aday: { id: number; sozlesmeNo: string }, donem: Tarih | null, mesaj: string, bugun: Tarih): Promise<void> {
+  const anahtar = `ARTIS_HESAP_HATA:sozlesme:${aday.id}:${donem ?? 'genel'}`
+  await tx.hatirlatma.upsert({
+    where: { anahtar },
+    create: {
+      anahtar, kural: 'ARTIS_HESAP_HATA', iliskiliTur: 'sozlesme', iliskiliId: String(aday.id), sozlesmeId: aday.id,
+      baslik: `Kira artışı hesaplanamadı — ${aday.sozlesmeNo}`, aciklama: mesaj,
+      hedefTarih: dbTarih(donem ?? bugun), gorunurTarih: dbTarih(bugun), oncelik: 'KRITIK', kararGerekli: true,
+    },
+    update: { aciklama: mesaj },
+  })
+}
+
 export interface ArtisHesapSonucu {
   hesaplanan: number
   bekleyen: number
-  /** Yalnızca toplu çağrıda ve yalnızca hata varsa: hesaplanamayan sözleşmeler (ileti sözleşme numarasıyla başlar). */
+  /**
+   * Yalnızca toplu çağrıda ve yalnızca hata varsa: hesaplanamayan sözleşmeler (ileti sözleşme numarasıyla başlar).
+   * İş kuralı hataları ayrıca KRITIK `ARTIS_HESAP_HATA` hatırlatması olarak kalıcıdır; çakışmalar yalnızca burada görünür.
+   */
   hatalar?: string[]
 }
 
@@ -149,35 +175,41 @@ export async function artislariHesapla(tx: Tx, bugun: Tarih, sozlesmeId?: number
     else if (durum === 'BEKLEMEDE') sayac.bekleyen += 1
   }
   for (const aday of adaylar) {
+    const izleyici: { donem: Tarih | null } = { donem: null }
     if (sozlesmeId !== undefined) {
-      say(await sozlesmeArtisiniHesapla(tx, aday.id, ortam))
+      say(await sozlesmeArtisiniHesapla(tx, aday.id, ortam, izleyici))
       continue
     }
     await tx.$executeRaw`SAVEPOINT artis_hesabi`
     try {
-      say(await sozlesmeArtisiniHesapla(tx, aday.id, ortam))
+      say(await sozlesmeArtisiniHesapla(tx, aday.id, ortam, izleyici))
       await tx.$executeRaw`RELEASE SAVEPOINT artis_hesabi`
     } catch (e) {
       if (!(e instanceof CakismaHatasi || e instanceof IsKuraliHatasi)) throw e
       await tx.$executeRaw`ROLLBACK TO SAVEPOINT artis_hesabi`
       await tx.$executeRaw`RELEASE SAVEPOINT artis_hesabi`
+      // Çakışma geçicidir (ertesi çalışmada yeniden denenir, sessiz); iş kuralı hatası kullanıcı müdahalesi ister ve kalıcı olarak görünür kalmalıdır.
+      if (e instanceof IsKuraliHatasi) await artisHesapHatasiniBildir(tx, aday, izleyici.donem, e.message, bugun)
       hatalar.push(e instanceof IsKuraliHatasi && e.message.startsWith(aday.sozlesmeNo) ? e.message : `${aday.sozlesmeNo}: ${e.message}`)
     }
   }
   return hatalar.length > 0 ? { ...sayac, hatalar } : sayac
 }
 
-interface FarkOzeti { fark: number; fazlaOdeme: number }
+interface FarkOzeti { fark: number; fazlaOdeme: number; iptalFark: number }
 
 /**
  * Eski bedelle ödeme sürecine girmiş (PAKETTE/ODEME_EMRINDE/ODENDI) taksitler için fark taksiti; fark negatifse kalıcı fazla ödeme
  * hatırlatması. PLANLANDI taksitlere dokunulmaz: `taksitPlaniniGuncelle` onları yeniden fiyatlar. Çağıran sözleşme satırını kilitlemiş olmalıdır.
  *
- * taksit_fark_baglantili: FARK taksiti hem ana takside hem artış hesabına bağlı olmalıdır; bu yüzden artış hesabı olmayan
- * (tespit/anlaşma/düzeltme) bir değişiklikte eksik ödeme doğuyorsa fark taksiti açılamaz ve işlem iş kuralı hatasıyla reddedilir.
+ * FARK taksiti ana taksite ve onu doğuran kira dönemine bağlanır (`taksit_fark_baglantili`); artış hesabı yalnızca artıştan gelen
+ * kira dönemi için doludur, tespit/anlaşma/düzeltmede boştur. Tespit dönem başından geriye işlediği için (TBK 344/3) bunlar da fark doğurur.
+ *
+ * Bir taksitin tahakkuk eden tutarı: ana tutar + ödeme sürecine girmiş önceki FARK'lar. Henüz PLANLANDI olan önceki FARK'lar tahakkuk
+ * etmemiştir: iptal edilir (korumalı yazma) ve eksik/fazla farkın tamamı tek yeni FARK ile (ya da fazla ödeme hatırlatmasıyla) karşılanır.
  */
-async function farklariIsle(tx: Tx, sozlesmeId: number, d: Tarih, artisHesabiId: number | null, bugun: Tarih): Promise<FarkOzeti> {
-  const ozet: FarkOzeti = { fark: 0, fazlaOdeme: 0 }
+async function farklariIsle(tx: Tx, sozlesmeId: number, d: Tarih, kiraDonemiId: number, artisHesabiId: number | null, bugun: Tarih): Promise<FarkOzeti> {
+  const ozet: FarkOzeti = { fark: 0, fazlaOdeme: 0, iptalFark: 0 }
   const s = await tx.sozlesme.findUniqueOrThrow({
     where: { id: sozlesmeId },
     include: {
@@ -195,12 +227,16 @@ async function farklariIsle(tx: Tx, sozlesmeId: number, d: Tarih, artisHesabiId:
     const donem = { baslangic: tarihDb(x.donemBaslangic), bitis: tarihDb(x.donemBitis) }
     const yeni = taksitTutari({ donem, periyotAy: s.odemePeriyoduAy as OdemePeriyodu, kiraAyiCapasi: tarihDb(s.baslangic), kiraDonemleri: kd, kist: s.kistYontemi })
     if (!yeni.ok) throw new IsKuraliHatasi(yeni.hata.kod, `${s.sozlesmeNo}: ${yeni.hata.mesaj}`)
-    // Taksit için bugüne kadar tahakkuk eden tutar: ana tutar + iptal edilmemiş önceki fark taksitleri (aynı dönemde ikinci değişiklikte çift sayım olmasın).
-    const eski = x.farkTaksitleri.reduce((toplam, f) => toplam.plus(paraDb(f.tutar)), paraDb(x.tutar))
+    for (const f of x.farkTaksitleri.filter((y) => y.durum === 'PLANLANDI')) {
+      const r = await tx.taksit.updateMany({ where: { id: f.id, durum: 'PLANLANDI' }, data: { durum: 'IPTAL', version: { increment: 1 } } })
+      if (r.count === 0) throw new CakismaHatasi()
+      ozet.iptalFark += 1
+    }
+    const eski = x.farkTaksitleri.filter((y) => y.durum !== 'PLANLANDI').reduce((toplam, f) => toplam.plus(paraDb(f.tutar)), paraDb(x.tutar))
     const fark = yeni.deger.tutar.minus(eski)
     if (fark.isZero()) continue
     if (fark.isNegative()) {
-      const anahtar = `H5_FAZLA:taksit:${x.id}:${artisHesabiId ?? `elle-${d}`}`
+      const anahtar = `H5_FAZLA:taksit:${x.id}:${kiraDonemiId}`
       const veri = {
         kural: 'H5_FAZLA_ODEME', iliskiliTur: 'taksit', iliskiliId: String(x.id), sozlesmeId,
         baslik: `Fazla ödeme — ${s.sozlesmeNo}`,
@@ -210,14 +246,6 @@ async function farklariIsle(tx: Tx, sozlesmeId: number, d: Tarih, artisHesabiId:
       await tx.hatirlatma.upsert({ where: { anahtar }, create: { anahtar, ...veri }, update: veri })
       ozet.fazlaOdeme += 1
       continue
-    }
-    if (artisHesabiId === null) {
-      throw new IsKuraliHatasi(
-        'FARK',
-        `${formatTarih(donem.baslangic)} – ${formatTarih(donem.bitis)} taksiti ödeme sürecinde; yeni bedel ${formatTL(fark)} eksik ödeme doğuruyor. ` +
-          'Fark taksiti yalnızca kira artışı onayına bağlı açılabildiğinden bu değişiklik kaydedilemedi: başlangıç tarihini ödeme sürecindeki taksitlerden sonraya alın.',
-        'baslangic',
-      )
     }
     const goruntu: TaksitGoruntusu = {
       surum: HESAP_SURUMU, hesapZamani: new Date().toISOString(), donem: { baslangic: enBuyukTarih(donem.baslangic, d), bitis: donem.bitis },
@@ -229,7 +257,7 @@ async function farklariIsle(tx: Tx, sozlesmeId: number, d: Tarih, artisHesabiId:
       data: {
         sozlesmeId, tur: 'FARK', donemBaslangic: dbTarih(enBuyukTarih(donem.baslangic, d)), donemBitis: x.donemBitis,
         vadeTarihi: dbTarih(gunEkle(bugun, vadeGun)), tutar: paraYaz(fark), hesapGoruntusu: jsonYaz(goruntu),
-        anaTaksitId: x.id, artisHesabiId,
+        anaTaksitId: x.id, kiraDonemiId, artisHesabiId,
       },
     })
     ozet.fark += 1
@@ -237,7 +265,7 @@ async function farklariIsle(tx: Tx, sozlesmeId: number, d: Tarih, artisHesabiId:
   return ozet
 }
 
-interface DonemAcmaOzeti { plan: PlanOzeti; fark: number; fazlaOdeme: number }
+interface DonemAcmaOzeti { plan: PlanOzeti; fark: number; fazlaOdeme: number; iptalFark: number }
 
 /** Çağıran sözleşme satırını kilitlemiş olmalıdır (kilit işlemin ilk ifadesi). */
 async function yeniKiraDonemiAc(
@@ -257,10 +285,11 @@ async function yeniKiraDonemiAc(
   if (!onceki) throw new IsKuraliHatasi('DONEM', 'Bu tarihten önceki kira dönemi bulunamadı.', 'baslangic')
   // kira_donemi_cakismaz ertelenemez: eski dönem kapanmadan yenisi eklenemez.
   await tx.kiraDonemi.update({ where: { id: onceki.id }, data: { bitis: dbTarih(gunEkle(d, -1)) } })
-  await tx.kiraDonemi.create({
+  const yeniDonem = await tx.kiraDonemi.create({
     data: { sozlesmeId, baslangic: dbTarih(d), bitis: onceki.bitis, bedelTutari: paraYaz(bedel), bedelTabani: onceki.bedelTabani, kaynak, artisHesabiId, aciklama, olusturanId: baglam.kullaniciId },
+    select: { id: true },
   })
-  const farklar = await farklariIsle(tx, sozlesmeId, d, artisHesabiId, bugun)
+  const farklar = await farklariIsle(tx, sozlesmeId, d, yeniDonem.id, artisHesabiId, bugun)
   const plan = await taksitPlaniniGuncelle(tx, sozlesmeId, bugun)
   return { plan, ...farklar }
 }
@@ -282,7 +311,7 @@ export async function artisOnayla(id: number, version: number, baglam: IslemBagl
       varlik: 'sozlesme', varlikId: sozlesmeId, eylem: 'ARTIS_ONAY',
       sonra: {
         artisHesabiId: id, donem: tarihDb(a.donemBaslangic), eskiBedel: a.eskiBedel.toFixed(2), yeniBedel: a.yeniBedel.toFixed(2),
-        uygulananOran: a.uygulananOran?.toString(), plan: ozet.plan, farkTaksiti: ozet.fark, fazlaOdemeHatirlatmasi: ozet.fazlaOdeme,
+        uygulananOran: a.uygulananOran?.toString(), plan: ozet.plan, farkTaksiti: ozet.fark, iptalFarkTaksiti: ozet.iptalFark, fazlaOdemeHatirlatmasi: ozet.fazlaOdeme,
       },
     })
   }, ISLEM)
@@ -328,15 +357,38 @@ export async function kiraBedeliDegistir(
     if (!yururlukteMi(s.durum)) throw new IsKuraliHatasi('DURUM', 'Yalnızca yürürlükteki sözleşmenin bedeli değiştirilir.')
     const r = await tx.sozlesme.updateMany({ where: { id: sozlesmeId, version }, data: { version: { increment: 1 } } })
     if (r.count === 0) throw new CakismaHatasi()
-    await tx.artisHesabi.updateMany({
-      where: { sozlesmeId, donemBaslangic: { gte: dbTarih(g.baslangic) }, durum: { in: ['BEKLEMEDE', 'HESAPLANDI'] } },
-      data: { durum: 'IPTAL', version: { increment: 1 } },
+    // Son kira döneminden sonra, değişiklik tarihinden önce onay bekleyen bir artış varsa yeni dönem onu onaylanamaz bırakırdı (sıra kuralı):
+    // sessizce yetim bırakmak yerine önce onaylanması ya da değişikliğin onun tarihinden başlatılması istenir.
+    const sonDonem = await tx.kiraDonemi.findFirst({ where: { sozlesmeId }, orderBy: { baslangic: 'desc' }, select: { baslangic: true } })
+    const acikArtis = sonDonem === null ? null : await tx.artisHesabi.findFirst({
+      where: { sozlesmeId, durum: { in: ACIK_ARTIS_DURUMLARI }, donemBaslangic: { gt: sonDonem.baslangic, lt: dbTarih(g.baslangic) } },
+      orderBy: { donemBaslangic: 'asc' }, select: { donemBaslangic: true },
     })
+    if (acikArtis) {
+      throw new IsKuraliHatasi(
+        'ACIK_ARTIS',
+        `${formatTarih(tarihDb(acikArtis.donemBaslangic))} tarihli artış onay bekliyor. Önce onu onaylayın ya da değişikliği o artışın başlangıç tarihinden başlatın.`,
+        'baslangic',
+      )
+    }
+    // Değişiklik tarihinde ya da sonrasında başlayacak onaysız artışlar bu bedelle geçersiz kalır; kimlikleri denetime yazılır.
+    const iptalArtisIdleri = (await tx.artisHesabi.findMany({
+      where: { sozlesmeId, donemBaslangic: { gte: dbTarih(g.baslangic) }, durum: { in: ACIK_ARTIS_DURUMLARI } }, select: { id: true }, orderBy: { id: 'asc' },
+    })).map((a) => a.id)
+    if (iptalArtisIdleri.length > 0) {
+      const iptal = await tx.artisHesabi.updateMany({
+        where: { id: { in: iptalArtisIdleri }, durum: { in: ACIK_ARTIS_DURUMLARI } }, data: { durum: 'IPTAL', version: { increment: 1 } },
+      })
+      if (iptal.count !== iptalArtisIdleri.length) throw new CakismaHatasi()
+    }
     const ozet = await yeniKiraDonemiAc(tx, sozlesmeId, g.baslangic, g.bedel, g.kaynak, null, aciklama, baglam, bugun)
     // Dayanak serbest metindir (kişisel veri içerebilir): denetim satırına metni değil, yazıldığı bilgisi girer; metin kira dönemi satırında durur.
     await denetimKaydi(tx, baglam, {
       varlik: 'sozlesme', varlikId: sozlesmeId, eylem: 'KIRA_BEDELI_DEGISTI',
-      sonra: { baslangic: g.baslangic, bedel: g.bedel.toFixed(2), kaynak: g.kaynak, aciklamaYazildi: true, plan: ozet.plan, fazlaOdemeHatirlatmasi: ozet.fazlaOdeme },
+      sonra: {
+        baslangic: g.baslangic, bedel: g.bedel.toFixed(2), kaynak: g.kaynak, aciklamaYazildi: true, iptalArtisIdleri,
+        plan: ozet.plan, farkTaksiti: ozet.fark, iptalFarkTaksiti: ozet.iptalFark, fazlaOdemeHatirlatmasi: ozet.fazlaOdeme,
+      },
     })
   }, ISLEM)
 }

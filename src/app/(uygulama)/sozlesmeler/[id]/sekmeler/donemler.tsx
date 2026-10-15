@@ -18,7 +18,8 @@ const ELLE_ORAN_ALANLARI: EylemAlani[] = [
   { ad: 'gerekce', etiket: 'Gerekçe', yerTutucu: 'Protokol tarihi vb.', zorunlu: true },
 ]
 
-export function DonemlerSekmesi({ s }: { s: SozlesmeDetayi }) {
+/** `ufukGun`: ARTIS_HESAP_UFUK_GUN parametresi (artış tarihine kaç gün kala günlük işin hesapladığı); tanımsızsa null. */
+export function DonemlerSekmesi({ s, ufukGun }: { s: SozlesmeDetayi; ufukGun: number | null }) {
   const yururlukte = s.durum === 'AKTIF' || s.durum === 'UZADI'
   // Yeni kira dönemi açılınca, o tarihte ya da öncesinde başlayan onaysız artışlar bir daha onaylanamaz (sıra kuralı).
   const sonKiraBaslangici = s.kiraDonemleri.at(-1)?.baslangic.getTime() ?? 0
@@ -50,7 +51,7 @@ export function DonemlerSekmesi({ s }: { s: SozlesmeDetayi }) {
       <Kart baslik="Artış hesapları" eylemler={yururlukte && s.artisKurali !== 'YOK' ? (
         <EylemFormu eylem={artislariSimdiHesaplaAction} dugme="Şimdi hesapla"><input type="hidden" name="id" value={s.id} /></EylemFormu>
       ) : null}>
-        {s.artislar.length === 0 ? <p className="text-sm text-slate-600">Henüz artış hesabı yok. Sıradaki artış tarihine 45 gün kala günlük işle hesaplanır.</p> : (
+        {s.artislar.length === 0 ? <p className="text-sm text-slate-600">Henüz artış hesabı yok. Sıradaki artış tarihine {ufukGun === null ? 'yaklaşınca' : `${ufukGun} gün kala`} günlük işle hesaplanır.</p> : (
           <Tablo>
             <thead><tr><Th>Dönem</Th><Th>Referans ay</Th><Th className="text-right">Tavan</Th><Th className="text-right">Sözleşme</Th><Th className="text-right">Uygulanan</Th><Th className="text-right">Eski → yeni</Th><Th>Durum</Th><Th /></tr></thead>
             <tbody className="divide-y divide-slate-100">

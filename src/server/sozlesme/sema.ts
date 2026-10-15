@@ -28,7 +28,8 @@ const pozitifPara = (zorunlu: boolean) => z.string().trim().nullish().transform(
     return null
   }
   const r = paraAyristir(v)
-  if (!r.ok || !r.deger.isPositive()) {
+  // decimal.js: isPositive() +0 için de true döner; sıfır tutar sözleşme_bedel_pozitif ihlali (ham veritabanı hatası) olurdu.
+  if (!r.ok || !r.deger.greaterThan(0)) {
     ctx.addIssue({ code: 'custom', message: r.ok ? 'Tutar sıfırdan büyük olmalı.' : r.hata.mesaj })
     return z.NEVER
   }

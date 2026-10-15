@@ -1,7 +1,9 @@
 import { notFound } from 'next/navigation'
+import { bugunIstanbul } from '@/core/tarih'
 import { kullaniciGerekli } from '@/server/auth/gerekli'
 import { tarihDbOpt } from '@/server/donustur'
 import { BulunamadiHatasi } from '@/server/hata'
+import { parametreOpsiyonel } from '@/server/parametre/servis'
 import { sihirbazSecenekleri, sozlesmeDetayi } from '@/server/sozlesme/sorgu'
 import { yolKimligi } from '@/app/_lib/form'
 import { SayfaBasligi } from '@/components/sayfa-basligi'
@@ -22,6 +24,12 @@ const SEKMELER = [
   { anahtar: 'genel', etiket: 'Genel' }, { anahtar: 'malikler', etiket: 'Malikler' }, { anahtar: 'donemler', etiket: 'Kira dönemleri ve artışlar' },
   { anahtar: 'taksitler', etiket: 'Taksitler' }, { anahtar: 'belgeler', etiket: 'Belgeler' }, { anahtar: 'gecmis', etiket: 'Geçmiş' },
 ]
+
+/** Artış hesabının ufku (gün); parametre tanımsız ya da bozuksa null (sekme yalnızca bilgi metnini genelleştirir). */
+async function artisUfukGunu(): Promise<number | null> {
+  const deger = await parametreOpsiyonel('ARTIS_HESAP_UFUK_GUN', bugunIstanbul())
+  return deger !== null && /^\d+$/.test(deger) ? Number(deger) : null
+}
 
 export default async function SozlesmeSayfasi({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ sekme?: string | string[] }> }) {
   await kullaniciGerekli()
@@ -45,7 +53,7 @@ export default async function SozlesmeSayfasi({ params, searchParams }: { params
       <div className="mt-4">
         {sekme === 'genel' ? <GenelSekmesi s={s} /> : null}
         {sekme === 'malikler' ? <MaliklerSekmesi s={s} kisiler={(await sihirbazSecenekleri()).kisiler} /> : null}
-        {sekme === 'donemler' ? <DonemlerSekmesi s={s} /> : null}
+        {sekme === 'donemler' ? <DonemlerSekmesi s={s} ufukGun={await artisUfukGunu()} /> : null}
         {sekme === 'taksitler' ? <TaksitlerSekmesi s={s} /> : null}
         {sekme === 'belgeler' ? <BelgelerSekmesi s={s} /> : null}
         {sekme === 'gecmis' ? <GecmisSekmesi s={s} /> : null}

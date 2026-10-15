@@ -385,6 +385,7 @@ model KiraDonemi {
   olusturanId      Int?              @map("olusturan_id")
   olusturmaZamani  DateTime          @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
   guncellemeZamani DateTime          @updatedAt @map("guncelleme_zamani") @db.Timestamptz(3)
+  farkTaksitleri   Taksit[]
 
   @@index([sozlesmeId, baslangic])
   @@map("kira_donemi")
@@ -435,6 +436,9 @@ model Taksit {
   farkTaksitleri   Taksit[]     @relation("FarkTaksiti")
   artisHesabiId    Int?         @map("artis_hesabi_id")
   artisHesabi      ArtisHesabi? @relation(fields: [artisHesabiId], references: [id])
+  /// FARK taksitini doğuran kira dönemi (artış, tespit, anlaşma ya da düzeltme).
+  kiraDonemiId     Int?         @map("kira_donemi_id")
+  kiraDonemi       KiraDonemi?  @relation(fields: [kiraDonemiId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   version          Int          @default(0)
   olusturmaZamani  DateTime     @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
   guncellemeZamani DateTime     @updatedAt @map("guncelleme_zamani") @db.Timestamptz(3)

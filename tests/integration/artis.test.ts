@@ -14,6 +14,7 @@ import { ayEkle, ayinIlkGunu, ayKaydir, bugunIstanbul, gunEkle, tarih as t, tari
 import { artisElleOranGir, artisOnayla, artislariHesapla, kiraBedeliDegistir } from '@/server/artis/servis'
 import { endeksElleGir } from '@/server/endeks/servis'
 import { sozlesmeAktiflestir, sozlesmeTaslakKaydet } from '@/server/sozlesme/servis'
+import { taksitPlaniniGuncelle } from '@/server/taksit/servis'
 import { CakismaHatasi, IsKuraliHatasi } from '@/server/hata'
 import { TEST_BAGLAMI, temizle } from './yardimci'
 import { girdi, hazirlik, type Hazirlik } from './sozlesme-yardimci'
@@ -256,6 +257,52 @@ describe('toplu hesap: sözleşme başına yalıtım ve sessiz yeniden çalışm
     expect((await prisma.artisHesabi.findFirstOrThrow({ where: { sozlesmeId: saglam } })).durum).toBe('HESAPLANDI')
 
     await expect(prisma.$transaction((tx) => artislariHesapla(tx, BUGUN, bozuk))).rejects.toMatchObject({ kod: 'DONEM' })
+
+    // İş kuralı hatası kalıcı, karar gerektiren KRITIK hatırlatma olarak görünür; sağlam sözleşmeler için satır açılmaz.
+    const h = await prisma.hatirlatma.findMany({ where: { kural: 'ARTIS_HESAP_HATA' } })
+    expect(h).toHaveLength(1)
+    expect([h[0]?.anahtar, h[0]?.iliskiliTur, h[0]?.iliskiliId, h[0]?.sozlesmeId, h[0]?.baslik, h[0]?.oncelik, h[0]?.kararGerekli, h[0]?.durum]).toEqual([
+      `ARTIS_HESAP_HATA:sozlesme:${bozuk}:2026-11-01`, 'sozlesme', String(bozuk), bozuk, 'Kira artışı hesaplanamadı — BOZUK-1', 'KRITIK', true, 'ACIK',
+    ])
+    expect(h[0]?.aciklama).toBe(sonuc.hatalar?.[0])
+  })
+
+  it('hata hatırlatması yeniden çalışmada tekrarlanmaz; yalnızca iletisi güncellenir (kapatılmış kayıt açılmaz)', async () => {
+    const bozuk = await sozlesme({ sozlesmeNo: 'BOZUK-2' })
+    await prisma.kiraDonemi.updateMany({ where: { sozlesmeId: bozuk }, data: { bitis: new Date('2026-06-30') } })
+    await hesapla()
+    const [ilk] = await prisma.hatirlatma.findMany({ where: { kural: 'ARTIS_HESAP_HATA' } })
+    await prisma.hatirlatma.update({ where: { id: ilk!.id }, data: { durum: 'TAMAMLANDI', aciklama: 'eski ileti' } })
+    await hesapla()
+    const hepsi = await prisma.hatirlatma.findMany({ where: { kural: 'ARTIS_HESAP_HATA' } })
+    expect(hepsi.map((x) => [x.id, x.durum, x.aciklama?.startsWith('BOZUK-2')])).toEqual([[ilk!.id, 'TAMAMLANDI', true]])
+  })
+
+  it('sıralı artış: her çalışmada yalnız sıradaki artış hesaplanır; sonraki, öncekinin onaylı bedeline dayanır', async () => {
+    // 2023-11-01 başlangıçlı sözleşmede 2024-11-01, 2025-11-01 ve 2026-11-01 artış tarihleri ufuk (BUGUN + 45 gün) içindedir.
+    const id = await sozlesme({ baslangic: '2023-11-01', bitis: '2027-10-31' }, t('2023-11-01'))
+    const artislar = () => prisma.artisHesabi.findMany({ where: { sozlesmeId: id }, orderBy: { donemBaslangic: 'asc' } })
+
+    expect(await hesapla()).toEqual({ hesaplanan: 1, bekleyen: 0 })
+    const [d1] = await artislar()
+    expect([iso(d1!.donemBaslangic), d1!.durum, d1!.eskiBedel.toFixed(2), d1!.yeniBedel?.toFixed(2)]).toEqual(['2024-11-01', 'HESAPLANDI', '10000.00', '16202.00'])
+    expect(await artislar()).toHaveLength(1)
+
+    // d1 onay beklerken sonraki çalışma d2'yi hesaplamaz.
+    expect(await hesapla()).toEqual({ hesaplanan: 0, bekleyen: 0 })
+    expect(await artislar()).toHaveLength(1)
+
+    await artisOnayla(d1!.id, d1!.version, TEST_BAGLAMI, BUGUN)
+    expect(await hesapla()).toEqual({ hesaplanan: 1, bekleyen: 0 })
+    const [, d2] = await artislar()
+    expect([iso(d2!.donemBaslangic), d2!.durum, d2!.eskiBedel.toFixed(2), d2!.yeniBedel?.toFixed(2)]).toEqual(['2025-11-01', 'HESAPLANDI', '16202.00', '22221.04'])
+    expect(await artislar()).toHaveLength(2)
+
+    // d2 onaylanınca sıra 2026-11-01'e gelir; referans ay (2026-10) için onaylı endeks yok.
+    await artisOnayla(d2!.id, d2!.version, TEST_BAGLAMI, BUGUN)
+    expect(await hesapla()).toEqual({ hesaplanan: 0, bekleyen: 1 })
+    const [, , d3] = await artislar()
+    expect([iso(d3!.donemBaslangic), d3!.durum, d3!.eskiBedel.toFixed(2)]).toEqual(['2026-11-01', 'BEKLEMEDE', '22221.04'])
   })
 
   it('değişmeyen BEKLEMEDE kaydı yeniden çalışmada sürüm artırmaz, denetim satırı yazmaz', async () => {
@@ -285,7 +332,7 @@ describe('toplu hesap: sözleşme başına yalıtım ve sessiz yeniden çalışm
 })
 
 describe('fark taksitleri: ayrıntılar', () => {
-  it('ödeme sürecindeki taksit için artış farkı yalnızca artış hesabına bağlı taksit olur; PLANLANDI taksit yeniden fiyatlanır, fark açılmaz', async () => {
+  it('ödeme sürecindeki (PAKETTE) taksit için artış farkı FARK taksiti olur; PLANLANDI taksit yeniden fiyatlanır, fark açılmaz', async () => {
     const id = await sozlesme()
     await prisma.taksit.update({ where: { id: (await taksit(id, '2026-11')).id }, data: { durum: 'PAKETTE' } })
     await tufe12Gir(10, '31.20')
@@ -299,35 +346,109 @@ describe('fark taksitleri: ayrıntılar', () => {
     expect((await taksit(id, '2026-12')).tutar.toFixed(2)).toBe('13120.00')
   })
 
-  it('üç aylık ödenmiş taksitte ikinci değişiklik, önceki fark taksitini eski tutara sayar (çift sayım yok)', async () => {
+  /** Üç aylık, peşin sözleşme: 2026-11-01..2027-01-31 dönemi (3 × 10.000) ödenmiş. */
+  async function odenmisUcAylik() {
     const id = await sozlesme({ odemePeriyoduAy: 3 })
-    // 2026-11-01..2027-01-31 dönemi ödenmiş.
-    await prisma.taksit.update({ where: { id: (await taksit(id, '2026-11')).id }, data: { durum: 'ODENDI' } })
+    const ana = await taksit(id, '2026-11')
+    await prisma.taksit.update({ where: { id: ana.id }, data: { durum: 'ODENDI' } })
+    return { id, ana }
+  }
+  const farklar = (id: number) => prisma.taksit.findMany({ where: { sozlesmeId: id, tur: 'FARK' }, orderBy: { id: 'asc' } })
+  const surum = async (id: number) => (await prisma.sozlesme.findUniqueOrThrow({ where: { id } })).version
+  async function artisiOnayla(id: number) {
     await tufe12Gir(10, '31.20')
     await hesapla()
     const a = await prisma.artisHesabi.findFirstOrThrow({ where: { sozlesmeId: id } })
     await artisOnayla(a.id, a.version, TEST_BAGLAMI, BUGUN)
-    const fark = await prisma.taksit.findFirstOrThrow({ where: { sozlesmeId: id, tur: 'FARK' } })
-    expect(fark.tutar.toFixed(2)).toBe('9360.00')
+    return a
+  }
+  const tespit = (id: number, v: number, baslangic: string, bedel: string) =>
+    kiraBedeliDegistir(id, v, { baslangic: t(baslangic), bedel: para(bedel), kaynak: 'TESPIT', aciklama: 'Karar' }, TEST_BAGLAMI, BUGUN)
 
-    // Aralıktan itibaren 9.000: dönem toplamı 13.120 + 2 × 9.000 = 31.120; ödenen 30.000 + 9.360 = 39.360 → 8.240 fazla.
-    const s = await prisma.sozlesme.findUniqueOrThrow({ where: { id } })
-    await kiraBedeliDegistir(id, s.version, { baslangic: t('2026-12-01'), bedel: para('9000'), kaynak: 'TESPIT', aciklama: 'Karar' }, TEST_BAGLAMI, BUGUN)
-    const h5 = await prisma.hatirlatma.findFirstOrThrow({ where: { kural: 'H5_FAZLA_ODEME', sozlesmeId: id } })
-    expect(h5.aciklama).toContain('8.240,00')
-    expect(await prisma.taksit.count({ where: { sozlesmeId: id, tur: 'FARK' } })).toBe(1)
+  it('FARK taksiti artıştan gelince hem artış hesabına hem artışı uygulayan kira dönemine bağlanır', async () => {
+    const { id, ana } = await odenmisUcAylik()
+    const a = await artisiOnayla(id)
+    const [fark] = await farklar(id)
+    const kd = await prisma.kiraDonemi.findFirstOrThrow({ where: { artisHesabiId: a.id } })
+    expect([fark?.tutar.toFixed(2), fark?.anaTaksitId, fark?.artisHesabiId, fark?.kiraDonemiId, fark?.durum]).toEqual(['9360.00', ana.id, a.id, kd.id, 'PLANLANDI'])
   })
 
-  it('artış hesabı olmayan bedel değişikliği ödenmiş taksitte eksik ödeme doğuracaksa reddedilir ve hiçbir şey değişmez', async () => {
+  it('tespit dönem başından geriye işler: ödenmiş taksitler için artış hesabı olmayan, kira dönemine bağlı pozitif FARK taksitleri açılır; yeniden çalıştırma tekrarlamaz', async () => {
     const id = await sozlesme()
-    await prisma.taksit.update({ where: { id: (await taksit(id, '2026-11')).id }, data: { durum: 'ODENDI' } })
-    const s = await prisma.sozlesme.findUniqueOrThrow({ where: { id } })
-    // taksit_fark_baglantili: FARK taksiti artış hesabına bağlı olmalı; bağsız artış için ham veritabanı hatası yerine iş kuralı hatası.
-    await expect(kiraBedeliDegistir(id, s.version, { baslangic: t('2026-11-01'), bedel: para('12000'), kaynak: 'TESPIT', aciklama: 'Karar' }, TEST_BAGLAMI, BUGUN))
-      .rejects.toMatchObject({ name: 'IsKuraliHatasi', kod: 'FARK' })
-    expect(await prisma.kiraDonemi.count({ where: { sozlesmeId: id } })).toBe(1)
-    expect(await prisma.taksit.count({ where: { sozlesmeId: id, tur: 'FARK' } })).toBe(0)
-    expect((await prisma.sozlesme.findUniqueOrThrow({ where: { id } })).version).toBe(s.version)
+    const kasim = await taksit(id, '2026-11')
+    const aralik = await taksit(id, '2026-12')
+    await prisma.taksit.updateMany({ where: { id: { in: [kasim.id, aralik.id] } }, data: { durum: 'ODENDI' } })
+    const v = await surum(id)
+    await tespit(id, v, '2026-11-01', '12000')
+    const kd = await prisma.kiraDonemi.findFirstOrThrow({ where: { sozlesmeId: id, kaynak: 'TESPIT' } })
+    const fark = await farklar(id)
+    expect(fark.map((f) => [f.anaTaksitId, f.tutar.toFixed(2), iso(f.vadeTarihi), f.artisHesabiId, f.kiraDonemiId, f.durum]))
+      .toEqual([[kasim.id, '2000.00', '2026-10-30', null, kd.id, 'PLANLANDI'], [aralik.id, '2000.00', '2026-10-30', null, kd.id, 'PLANLANDI']])
+    // Ödeme sürecine girmeyen sonraki taksit yeniden fiyatlandı, FARK açılmadı.
+    expect((await taksit(id, '2027-01')).tutar.toFixed(2)).toBe('12000.00')
+    expect(await prisma.taksit.count({ where: { sozlesmeId: id, tur: 'FARK' } })).toBe(2)
+
+    // Aynı değişiklik yeniden gönderilirse kira dönemi zaten var: reddedilir, fark taksitleri değişmez.
+    await expect(tespit(id, await surum(id), '2026-11-01', '12000')).rejects.toMatchObject({ kod: 'SIRA' })
+    // Plan ve artış hesabı yeniden çalışınca FARK taksitleri aynen kalır.
+    await prisma.$transaction(async (tx) => {
+      await taksitPlaniniGuncelle(tx, id, BUGUN)
+      await artislariHesapla(tx, BUGUN)
+    })
+    const sonra = await farklar(id)
+    expect(sonra.map((f) => [f.id, f.tutar.toFixed(2), f.version, f.durum])).toEqual(fark.map((f) => [f.id, f.tutar.toFixed(2), f.version, f.durum]))
+  })
+
+  it('aynı ödenmiş taksit üzerinde art arda iki bedel değişikliği çakışmadan ikisi için de FARK üretir', async () => {
+    const { id, ana } = await odenmisUcAylik()
+    await tespit(id, await surum(id), '2026-11-01', '12000')
+    const [ilk] = await farklar(id)
+    expect(ilk?.tutar.toFixed(2)).toBe('6000.00')
+    // İlk fark ödendi: tahakkuk etmiş sayılır.
+    await prisma.taksit.update({ where: { id: ilk!.id }, data: { durum: 'ODENDI' } })
+    // Dönem toplamı 12.000 + 2 × 15.000 = 42.000; tahakkuk 30.000 + 6.000 = 36.000.
+    await tespit(id, await surum(id), '2026-12-01', '15000')
+    const hepsi = await farklar(id)
+    expect(hepsi.map((f) => [f.anaTaksitId, f.tutar.toFixed(2), f.durum])).toEqual([[ana.id, '6000.00', 'ODENDI'], [ana.id, '6000.00', 'PLANLANDI']])
+    expect(new Set(hepsi.map((f) => f.kiraDonemiId)).size).toBe(2)
+  })
+
+  it('ödenmiş önceki FARK tahakkuk etmiş sayılır: ikinci değişiklik fazla ödeme çıkarırsa fark çift sayılmaz', async () => {
+    const { id } = await odenmisUcAylik()
+    await artisiOnayla(id)
+    const [fark1] = await farklar(id)
+    expect(fark1?.tutar.toFixed(2)).toBe('9360.00')
+    await prisma.taksit.update({ where: { id: fark1!.id }, data: { durum: 'ODENDI' } })
+    // Aralıktan itibaren 9.000: dönem toplamı 13.120 + 2 × 9.000 = 31.120; ödenen 30.000 + 9.360 = 39.360 → 8.240 fazla.
+    await tespit(id, await surum(id), '2026-12-01', '9000')
+    const h5 = await prisma.hatirlatma.findFirstOrThrow({ where: { kural: 'H5_FAZLA_ODEME', sozlesmeId: id } })
+    expect(h5.aciklama).toContain('8.240,00')
+    expect((await farklar(id)).map((f) => [f.id, f.durum])).toEqual([[fark1!.id, 'ODENDI']])
+  })
+
+  it('henüz PLANLANDI olan önceki FARK tahakkuk etmemiştir: iptal edilir, kalan farkın tamamı tek yeni FARK olur', async () => {
+    const { id, ana } = await odenmisUcAylik()
+    await artisiOnayla(id)
+    const [fark1] = await farklar(id)
+    expect([fark1?.tutar.toFixed(2), fark1?.durum]).toEqual(['9360.00', 'PLANLANDI'])
+    // Aralıktan itibaren 9.000: dönem toplamı 31.120; ödenen yalnızca 30.000 → 1.120 eksik (9.360 FARK hiç ödenmedi).
+    await tespit(id, await surum(id), '2026-12-01', '9000')
+    const hepsi = await farklar(id)
+    expect(hepsi.map((f) => [f.id === fark1!.id, f.tutar.toFixed(2), f.durum, f.artisHesabiId === null])).toEqual([[true, '9360.00', 'IPTAL', false], [false, '1120.00', 'PLANLANDI', true]])
+    expect(hepsi[1]?.anaTaksitId).toBe(ana.id)
+    expect(await prisma.hatirlatma.count({ where: { kural: 'H5_FAZLA_ODEME' } })).toBe(0)
+  })
+
+  it('PLANLANDI FARK iptal edilince fazla ödeme yalnızca ödenen tutara göre hesaplanır', async () => {
+    const { id } = await odenmisUcAylik()
+    await artisiOnayla(id)
+    const [fark1] = await farklar(id)
+    // Aralıktan itibaren 8.000: dönem toplamı 13.120 + 2 × 8.000 = 29.120; ödenen 30.000 → 880 fazla (FARK dahil sayılsaydı 10.240).
+    await tespit(id, await surum(id), '2026-12-01', '8000')
+    const h5 = await prisma.hatirlatma.findFirstOrThrow({ where: { kural: 'H5_FAZLA_ODEME', sozlesmeId: id } })
+    expect(h5.aciklama).toContain('880,00')
+    expect(h5.aciklama).not.toContain('10.240,00')
+    expect((await farklar(id)).map((f) => [f.id === fark1!.id, f.durum])).toEqual([[true, 'IPTAL']])
   })
 })
 
@@ -345,6 +466,29 @@ describe('kira bedeli değişikliği: doğrulamalar', () => {
     await prisma.sozlesme.update({ where: { id }, data: { durum: 'SONA_ERDI', version: { increment: 1 } } })
     await expect(kiraBedeliDegistir(id, s.version + 1, g, TEST_BAGLAMI, BUGUN)).rejects.toMatchObject({ kod: 'DURUM' })
     expect(await prisma.kiraDonemi.count({ where: { sozlesmeId: id } })).toBe(1)
+  })
+
+  it('onay bekleyen daha erken bir artış varken sonraki bir tarihe bedel değişikliği engellenir; hiçbir şey yazılmaz', async () => {
+    const id = await sozlesme()
+    await hesapla()
+    const a = await prisma.artisHesabi.findFirstOrThrow({ where: { sozlesmeId: id } })
+    const s = await prisma.sozlesme.findUniqueOrThrow({ where: { id } })
+    await expect(kiraBedeliDegistir(id, s.version, { baslangic: t('2026-12-01'), bedel: para('12000'), kaynak: 'TESPIT', aciklama: 'Karar' }, TEST_BAGLAMI, BUGUN))
+      .rejects.toMatchObject({ name: 'IsKuraliHatasi', kod: 'ACIK_ARTIS', alan: 'baslangic', message: '01.11.2026 tarihli artış onay bekliyor. Önce onu onaylayın ya da değişikliği o artışın başlangıç tarihinden başlatın.' })
+    expect(await prisma.kiraDonemi.count({ where: { sozlesmeId: id } })).toBe(1)
+    expect((await prisma.artisHesabi.findUniqueOrThrow({ where: { id: a.id } })).durum).toBe('BEKLEMEDE')
+    expect((await prisma.sozlesme.findUniqueOrThrow({ where: { id } })).version).toBe(s.version)
+  })
+
+  it('değişiklik tam artış tarihinden başlarsa o artışın yerine geçer ve iptal edilen artış kimliği denetime yazılır', async () => {
+    const id = await sozlesme()
+    await hesapla()
+    const a = await prisma.artisHesabi.findFirstOrThrow({ where: { sozlesmeId: id } })
+    const s = await prisma.sozlesme.findUniqueOrThrow({ where: { id } })
+    await kiraBedeliDegistir(id, s.version, { baslangic: t('2026-11-01'), bedel: para('12000'), kaynak: 'TESPIT', aciklama: 'Karar' }, TEST_BAGLAMI, BUGUN)
+    expect((await prisma.artisHesabi.findUniqueOrThrow({ where: { id: a.id } })).durum).toBe('IPTAL')
+    const kayit = await prisma.olayGunlugu.findFirstOrThrow({ where: { varlik: 'sozlesme', varlikId: String(id), eylem: 'KIRA_BEDELI_DEGISTI' } })
+    expect((kayit.sonra as { iptalArtisIdleri: number[] }).iptalArtisIdleri).toEqual([a.id])
   })
 
   it('açık artışları iptal eder; ödeme sürecinde olmayan taksitler yeni bedelle yeniden hesaplanır', async () => {

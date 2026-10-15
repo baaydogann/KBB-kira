@@ -66,10 +66,33 @@ describe('veritabanı kısıtları', () => {
     await expect(ornekSozlesme({ gecisBedeli: '5000.00' })).rejects.toThrow(/sozlesme_gecis_cift/)
   })
 
-  it('FARK taksiti ana taksit ve artış hesabına bağlı olmalı', async () => {
+  it('FARK taksiti ana taksit ve kira dönemine bağlı olmalı; artış hesabı gerekmez', async () => {
     const s = await ornekSozlesme()
+    const ana = await prisma.taksit.create({
+      data: { sozlesmeId: s.id, tur: 'NORMAL', donemBaslangic: new Date('2026-01-01'), donemBitis: new Date('2026-01-31'), vadeTarihi: new Date('2026-01-01'), tutar: '1', hesapGoruntusu: {} },
+    })
+    const kd = await prisma.kiraDonemi.create({ data: { sozlesmeId: s.id, baslangic: new Date('2026-01-01'), bitis: null, bedelTutari: '1', bedelTabani: 'AYLIK', kaynak: 'ILK' } })
     const fark = { sozlesmeId: s.id, tur: 'FARK' as const, donemBaslangic: new Date('2026-01-01'), donemBitis: new Date('2026-01-31'), vadeTarihi: new Date('2026-01-01'), tutar: '1', hesapGoruntusu: {} }
     await expect(prisma.taksit.create({ data: fark })).rejects.toThrow(/taksit_fark_baglantili/)
+    await expect(prisma.taksit.create({ data: { ...fark, anaTaksitId: ana.id } })).rejects.toThrow(/taksit_fark_baglantili/)
+    await expect(prisma.taksit.create({ data: { ...fark, kiraDonemiId: kd.id } })).rejects.toThrow(/taksit_fark_baglantili/)
+    await expect(prisma.taksit.create({ data: { ...fark, anaTaksitId: ana.id, kiraDonemiId: kd.id } })).resolves.toMatchObject({ artisHesabiId: null })
+  })
+
+  it('aynı ana taksit için aynı kira dönemi en çok bir aktif FARK doğurur; iptal edilen sayılmaz', async () => {
+    const s = await ornekSozlesme()
+    const ana = await prisma.taksit.create({
+      data: { sozlesmeId: s.id, tur: 'NORMAL', donemBaslangic: new Date('2026-01-01'), donemBitis: new Date('2026-01-31'), vadeTarihi: new Date('2026-01-01'), tutar: '1', hesapGoruntusu: {} },
+    })
+    const kd1 = await prisma.kiraDonemi.create({ data: { sozlesmeId: s.id, baslangic: new Date('2026-01-01'), bitis: new Date('2026-01-14'), bedelTutari: '1', bedelTabani: 'AYLIK', kaynak: 'ILK' } })
+    const kd2 = await prisma.kiraDonemi.create({ data: { sozlesmeId: s.id, baslangic: new Date('2026-01-15'), bitis: null, bedelTutari: '2', bedelTabani: 'AYLIK', kaynak: 'TESPIT' } })
+    const fark = { sozlesmeId: s.id, tur: 'FARK' as const, anaTaksitId: ana.id, donemBaslangic: new Date('2026-01-01'), donemBitis: new Date('2026-01-31'), vadeTarihi: new Date('2026-01-01'), tutar: '1', hesapGoruntusu: {} }
+    const ilk = await prisma.taksit.create({ data: { ...fark, kiraDonemiId: kd1.id } })
+    expect(benzersizIhlaliMi(await prisma.taksit.create({ data: { ...fark, kiraDonemiId: kd1.id } }).catch((e: unknown) => e))).toBe(true)
+    // Başka bir kira dönemi aynı ana taksit için ayrı FARK doğurabilir.
+    await expect(prisma.taksit.create({ data: { ...fark, kiraDonemiId: kd2.id } })).resolves.toBeTruthy()
+    await prisma.taksit.update({ where: { id: ilk.id }, data: { durum: 'IPTAL' } })
+    await expect(prisma.taksit.create({ data: { ...fark, kiraDonemiId: kd1.id } })).resolves.toBeTruthy()
   })
 })
 
