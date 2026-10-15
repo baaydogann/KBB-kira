@@ -27,6 +27,8 @@ const projeKoku = path.resolve(typeof __dirname === 'string' ? __dirname : proce
 const nextConfig: NextConfig = {
   outputFileTracingRoot: projeKoku,
   serverExternalPackages: ['@node-rs/argon2'],
+  // Takvim aboneliği tokenı adres yolundadır (/takvim/<token>.ics); geliştirme sunucusunun istek günlüğüne yazılmasın.
+  logging: { incomingRequests: { ignore: [/^\/takvim\//] } },
   async headers() {
     return [
       {

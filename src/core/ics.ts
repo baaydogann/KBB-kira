@@ -9,8 +9,9 @@ export interface IcsEtkinlik {
 
 const KODLAYICI = new TextEncoder()
 
+/** RFC 5545 §3.3.11 (TEXT): `\`, `;` ve `,` kaçırılır; her satır sonu (CRLF, çıplak CR, LF) `\n` olur (ham CR/LF içerik satırını bozar). */
 function kacis(s: string): string {
-  return s.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n')
+  return s.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r\n|\r|\n/g, '\\n')
 }
 
 /** RFC 5545 §3.1: satırlar 75 oktetten uzun olamaz; devam satırı tek boşlukla başlar. */
@@ -45,13 +46,14 @@ export function icsUret(p: { takvimAdi: string; etkinlikler: readonly IcsEtkinli
   for (const e of p.etkinlikler) {
     satirlar.push(
       'BEGIN:VEVENT',
-      `UID:${e.uid}`,
+      `UID:${kacis(e.uid)}`, // UID de TEXT değeridir (§3.8.4.7)
       `DTSTAMP:${damga(p.olusturma)}`,
       `DTSTART;VALUE=DATE:${e.tarih.replace(/-/g, '')}`,
       `DTEND;VALUE=DATE:${gunEkle(e.tarih, 1).replace(/-/g, '')}`,
       `SUMMARY:${kacis(e.baslik)}`,
       `DESCRIPTION:${kacis(e.aciklama)}`,
       'TRANSP:TRANSPARENT',
+      // Tüm gün etkinliğinin DTSTART'ı yerel 00:00 sayılır; TRIGGER:-PT15H alarmı bir önceki günün 09:00'una kurar (RFC 5545 §3.8.6.3).
       'BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${kacis(e.baslik)}`, 'TRIGGER:-PT15H', 'END:VALARM',
       'END:VEVENT',
     )
