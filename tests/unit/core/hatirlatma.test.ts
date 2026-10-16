@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { tarih as t } from '@/core/tarih'
 import {
-  EKSIK_VERI_BASLIK, OTOMATIK_KURALLAR, hatirlatmalariUret, type HatirlatmaKurali, type HatirlatmaVerisi, type SozlesmeOzeti, type TaksitOzeti,
+  EKSIK_VERI_BASLIK, OTOMATIK_KURALLAR, TASLAK_HATIRLATMA_GUN, hatirlatmalariUret, type HatirlatmaKurali, type HatirlatmaVerisi, type SozlesmeOzeti, type TaksitOzeti,
 } from '@/core/hatirlatma'
 
 const AYAR = {
@@ -24,7 +24,7 @@ function veri(ek: Partial<HatirlatmaVerisi> = {}): HatirlatmaVerisi {
   return {
     bugun: t('2026-10-15'), tatiller: new Set(['2026-10-29']), ayarlar: AYAR,
     sozlesmeler: [sozlesme()], planliTaksitler: [], artislar: [], bekleyenEndeksler: [],
-    sonOnayliTufe12Ayi: { yil: 2026, ay: 9 }, parametreBitisleri: [], ...ek,
+    sonOnayliTufe12Ayi: { yil: 2026, ay: 9 }, parametreBitisleri: [], taslaklar: [], ...ek,
   }
 }
 
@@ -324,6 +324,28 @@ describe('H11 / H12 / H13', () => {
     const p = { anahtar: 'DAMGA_AZAMI', yururlukBitis: t('2026-12-31') }
     expect(bul(veri({ parametreBitisleri: [p], bugun: t('2027-01-30') }), 'H13')).toHaveLength(1)
     expect(bul(veri({ parametreBitisleri: [p], bugun: t('2027-01-31') }), 'H13')).toHaveLength(0)
+  })
+})
+
+describe('I7: aktifleştirilmemiş taslak', () => {
+  const taslak = (baslangic: string) => ({ id: '7', no: 'T-7', kisaAd: 'Meram depo', baslangic: t(baslangic) })
+
+  it('başlangıcına 15 gün kalan taslak için karar gerektiren NORMAL H12; başlangıç geçtiyse KRITIK', () => {
+    const [h] = bul(veri({ sozlesmeler: [], taslaklar: [taslak('2026-10-30')] }), 'H12')
+    expect(h).toEqual({
+      anahtar: 'H12:sozlesme:7:TASLAK_AKTIF_DEGIL', kural: 'H12', iliskiliTur: 'sozlesme', iliskiliId: '7', sozlesmeId: '7',
+      baslik: 'Sözleşme taslağı aktifleştirilmedi — T-7',
+      aciklama: 'Meram depo: 30.10.2026 tarihinde başlıyor. Taslak aktifleştirilmedikçe taksit planı ve hatırlatmalar oluşmaz.',
+      hedefTarih: '2026-10-30', gorunurTarih: '2026-10-15', oncelik: 'NORMAL', kararGerekli: true,
+    })
+    expect(bul(veri({ sozlesmeler: [], taslaklar: [taslak('2026-10-15')] }), 'H12')[0]).toMatchObject({ oncelik: 'NORMAL' })
+    const gecmis = bul(veri({ sozlesmeler: [], taslaklar: [taslak('2026-10-14')] }), 'H12')[0]!
+    expect([gecmis.oncelik, gecmis.aciklama]).toEqual(['KRITIK', 'Meram depo: 14.10.2026 tarihinde başladı. Taslak aktifleştirilmedikçe taksit planı ve hatırlatmalar oluşmaz.'])
+  })
+
+  it('başlangıcına 15 günden fazla kalan taslak henüz görünmez', () => {
+    expect(bul(veri({ sozlesmeler: [], taslaklar: [taslak('2026-10-31')] }), 'H12')).toHaveLength(0)
+    expect(TASLAK_HATIRLATMA_GUN).toBe(15)
   })
 })
 

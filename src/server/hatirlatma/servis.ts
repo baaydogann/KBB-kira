@@ -1,6 +1,6 @@
 import { hisseToplamiBirMi } from '@/core/hisse'
 import {
-  hatirlatmalariUret, OTOMATIK_KURALLAR, type EksikVeri, type HatirlatmaAdayi, type HatirlatmaVerisi, type Oncelik,
+  hatirlatmalariUret, OTOMATIK_KURALLAR, TASLAK_HATIRLATMA_GUN, type EksikVeri, type HatirlatmaAdayi, type HatirlatmaVerisi, type Oncelik,
 } from '@/core/hatirlatma'
 import { bugunIstanbul, gunEkle, icindeMi, isGunuMu, karsilastir, type Ay, type Tarih } from '@/core/tarih'
 import type { IslemBaglami } from '../baglam'
@@ -38,7 +38,7 @@ export async function hatirlatmaVerisiYukle(tx: Tx, bugun: Tarih): Promise<Hatir
   const ids = sozlesmeler.map((s) => s.id)
   // İş günü sayısı takvim gününden fazla yer tutar (hafta sonu, tatil); 2 katı ödeme emri hazırlığının görünür olduğu en uzak vadeyi kapsar.
   const taksitUfku = gunEkle(bugun, Math.max(TAKSIT_UFKU_TABANI_GUN, ayarlar.vadeGorunurGun, ayarlar.odemeEmriIsGunu * 2))
-  const [pdfler, taksitler, artislar, bekleyen] = await Promise.all([
+  const [pdfler, taksitler, artislar, bekleyen, taslaklar] = await Promise.all([
     tx.belge.groupBy({ by: ['sahipId'], where: { sahipTur: 'sozlesme', belgeTuru: 'SOZLESME', sahipId: { in: ids } } }),
     // Taksit hatırlatmaları sözleşme durumundan bağımsızdır: sona ermiş/feshedilmiş sözleşmenin ödenmemiş taksiti de hatırlatılır.
     tx.taksit.findMany({
@@ -47,6 +47,10 @@ export async function hatirlatmaVerisiYukle(tx: Tx, bugun: Tarih): Promise<Hatir
     }),
     tx.artisHesabi.findMany({ where: { sozlesmeId: { in: ids }, durum: { not: 'IPTAL' } } }),
     tx.endeksDegeri.findMany({ where: { onayDurumu: 'BEKLIYOR' } }),
+    tx.sozlesme.findMany({
+      where: { durum: 'TASLAK', baslangic: { lte: dbTarih(gunEkle(bugun, TASLAK_HATIRLATMA_GUN)) } },
+      select: { id: true, sozlesmeNo: true, baslangic: true, tasinmaz: { select: { kisaAd: true } } },
+    }),
   ])
   const pdfVar = new Set(pdfler.map((p) => p.sahipId))
   return {
@@ -81,6 +85,7 @@ export async function hatirlatmaVerisiYukle(tx: Tx, bugun: Tarih): Promise<Hatir
     bekleyenEndeksler: bekleyen.map((e) => ({ id: String(e.id), seri: e.seri, ay: { yil: e.yil, ay: e.ay } })),
     sonOnayliTufe12Ayi: oranlar.sonOnayliTufe12,
     parametreBitisleri: bitisler,
+    taslaklar: taslaklar.map((x) => ({ id: String(x.id), no: x.sozlesmeNo, kisaAd: x.tasinmaz.kisaAd, baslangic: tarihDb(x.baslangic) })),
   }
 }
 

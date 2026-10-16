@@ -87,6 +87,10 @@ export interface TaksitOzeti {
   vade: Tarih
   tutar: string
 }
+/** Aktifleştirilmemiş sözleşme taslağı (loader yalnızca başlangıcına `TASLAK_HATIRLATMA_GUN` ya da daha az kalanları verir). */
+export interface TaslakOzeti { id: string; no: string; kisaAd: string; baslangic: Tarih }
+/** Taslak hatırlatması başlangıçtan bu kadar gün önce görünür. */
+export const TASLAK_HATIRLATMA_GUN = 15
 export interface ArtisOzeti { sozlesmeId: string; donemBaslangic: Tarih; durum: 'BEKLEMEDE' | 'HESAPLANDI' | 'ONAYLANDI' }
 export interface EndeksOzeti { id: string; seri: string; ay: Ay }
 /** Yürürlük kaydı. Loader her anahtar için yalnızca ardılı olmayan (en son) yürürlük kaydını verir. */
@@ -102,6 +106,7 @@ export interface HatirlatmaVerisi {
   bekleyenEndeksler: readonly EndeksOzeti[]
   sonOnayliTufe12Ayi: Ay | null
   parametreBitisleri: readonly ParametreBitisi[]
+  taslaklar: readonly TaslakOzeti[]
 }
 
 type Ekle = (a: HatirlatmaAdayi) => void
@@ -114,6 +119,7 @@ export function hatirlatmalariUret(v: HatirlatmaVerisi): HatirlatmaAdayi[] {
   odemeKurallari(v, ekle)
   endeksKurallari(v, ekle)
   for (const s of v.sozlesmeler) sozlesmeKurallari(v, s, ekle)
+  for (const s of v.taslaklar) taslakKurali(v, s, ekle)
   sistemKurallari(v, ekle)
   return sonuc
 }
@@ -292,6 +298,20 @@ function eksikVeriKurallari(v: HatirlatmaVerisi, s: SozlesmeOzeti, ekle: Ekle): 
       hedefTarih: v.bugun, gorunurTarih: v.bugun, oncelik: 'NORMAL', kararGerekli: false,
     })
   }
+}
+
+/**
+ * Başlangıcı yaklaşan ya da geçen taslak aktifleştirilmeden taksit planı ve hatırlatmaları oluşmaz: karar gerektiren H12. Aktifleştirme
+ * ya da taslağın silinmesiyle aday düşer ve kayıt kendiliğinden kapanır (H12 otomatik kuraldır).
+ */
+function taslakKurali(v: HatirlatmaVerisi, s: TaslakOzeti, ekle: Ekle): void {
+  const basladi = karsilastir(s.baslangic, v.bugun) < 0
+  ekle({
+    anahtar: `H12:sozlesme:${s.id}:TASLAK_AKTIF_DEGIL`, kural: 'H12', iliskiliTur: 'sozlesme', iliskiliId: s.id, sozlesmeId: s.id,
+    baslik: `Sözleşme taslağı aktifleştirilmedi — ${s.no}`,
+    aciklama: `${s.kisaAd}: ${formatTarih(s.baslangic)} tarihinde ${basladi ? 'başladı' : 'başlıyor'}. Taslak aktifleştirilmedikçe taksit planı ve hatırlatmalar oluşmaz.`,
+    hedefTarih: s.baslangic, gorunurTarih: gunEkle(s.baslangic, -TASLAK_HATIRLATMA_GUN), oncelik: basladi ? 'KRITIK' : 'NORMAL', kararGerekli: true,
+  })
 }
 
 function sistemKurallari(v: HatirlatmaVerisi, ekle: Ekle): void {

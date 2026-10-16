@@ -8,7 +8,7 @@ import {
   hatirlatmaErtele, hatirlatmalariUretVeKaydet, hatirlatmaTamamla, hatirlatmaVerisiYukle, panoVerisi,
 } from '@/server/hatirlatma/servis'
 import { sozlesmeAktiflestir, sozlesmeTaslakKaydet } from '@/server/sozlesme/servis'
-import { malikleriDegistir } from '@/server/sozlesme/yasam-dongusu'
+import { malikleriDegistir, taslakSil } from '@/server/sozlesme/yasam-dongusu'
 import { TEST_BAGLAMI, temizle } from './yardimci'
 import { girdi, hazirlik, type Hazirlik } from './sozlesme-yardimci'
 
@@ -86,6 +86,23 @@ describe('hatırlatma üretimi', () => {
     await prisma.parametre.updateMany({ where: { anahtar: 'HATIRLATMA_VADE_GORUNUR_GUN' }, data: { deger: '90' } })
     const genis = await aralik()
     expect(genis).toContain('2026-12-20')
+  })
+})
+
+describe('I7: aktifleştirilmemiş taslak', () => {
+  it('başlangıcına 15 gün kalan taslak için karar gerektiren H12 açılır; aktifleştirilince ya da silinince kendiliğinden kapanır; daha uzak taslak için açılmaz', async () => {
+    const yakin = await sozlesmeTaslakKaydet(girdi(h, { baslangic: '2026-10-30', bitis: '2027-10-29' }), TEST_BAGLAMI)
+    const silinecek = await sozlesmeTaslakKaydet(girdi(h, { baslangic: '2026-10-01', bitis: '2027-09-30' }), TEST_BAGLAMI)
+    const uzak = await sozlesmeTaslakKaydet(girdi(h, { baslangic: '2026-10-31', bitis: '2027-10-30' }), TEST_BAGLAMI)
+    await uret()
+    const kayit = (id: number) => prisma.hatirlatma.findUnique({ where: { anahtar: `H12:sozlesme:${id}:TASLAK_AKTIF_DEGIL` } })
+    const yakinKayit = await kayit(yakin)
+    expect([yakinKayit?.oncelik, yakinKayit?.kararGerekli, yakinKayit?.sozlesmeId, yakinKayit?.hedefTarih.toISOString().slice(0, 10)]).toEqual(['NORMAL', true, yakin, '2026-10-30'])
+    expect([(await kayit(silinecek))?.oncelik, await kayit(uzak)]).toEqual(['KRITIK', null])
+    await sozlesmeAktiflestir(yakin, 0, TEST_BAGLAMI, BUGUN)
+    await taslakSil(silinecek, 0, TEST_BAGLAMI)
+    await uret()
+    expect([(await kayit(yakin))?.durum, (await kayit(silinecek))?.durum]).toEqual(['OTOMATIK_KAPANDI', 'OTOMATIK_KAPANDI'])
   })
 })
 
