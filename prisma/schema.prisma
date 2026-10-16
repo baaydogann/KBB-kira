@@ -627,6 +627,8 @@ model OdemePaketi {
   kesinlestirenId         Int?             @map("kesinlestiren_id")
   kesinlesmeZamani        DateTime?        @map("kesinlesme_zamani") @db.Timestamptz(3)
   iptalNedeni             String?          @map("iptal_nedeni")
+  /// Ödemeyi geri almanın son gerekçesi (serbest metin; denetime yazılmaz).
+  odemeGeriAlmaNedeni     String?          @map("odeme_geri_alma_nedeni")
   version                 Int              @default(0)
   olusturmaZamani         DateTime         @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
   guncellemeZamani        DateTime         @updatedAt @map("guncelleme_zamani") @db.Timestamptz(3)

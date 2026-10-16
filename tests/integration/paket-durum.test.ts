@@ -6,6 +6,8 @@ import { tarihDb, tarihDbOpt } from '@/server/donustur'
 import { CakismaHatasi, IsKuraliHatasi } from '@/server/hata'
 import { borcSorguEkle, hacizEkle } from '@/server/kesinti/servis'
 import { parametreEkle } from '@/server/parametre/servis'
+import { kiraBedeliDegistir } from '@/server/artis/servis'
+import { damgaKaydiIptal } from '@/server/damga/servis'
 import { paketIptal, paketKesinlestir, paketOdemeEmriGir, paketOdemeGeriAl, paketOdendi } from '@/server/paket/durum'
 import { paketHesapla, type HesapParmakIzi, type PaketOnKontrolKaydi } from '@/server/paket/hesapla'
 import { sozlesmeFeshet } from '@/server/sozlesme/yasam-dongusu'
@@ -227,7 +229,7 @@ describe('ödeme emri ve ödeme', () => {
     const tk = await taksit(subat.id)
     expect([tk.durum, tk.odemeTarihi]).toEqual(['ODEME_EMRINDE', null])
     const pk = await paket(p)
-    expect([pk.durum, pk.odemeTarihi, pk.version]).toEqual(['ODEME_EMRINDE', null, 5])
+    expect([pk.durum, pk.odemeTarihi, pk.version, pk.odemeGeriAlmaNedeni]).toEqual(['ODEME_EMRINDE', null, 5, 'Banka iade etti'])
     const d = await prisma.olayGunlugu.findFirstOrThrow({ where: { varlik: 'odeme_paketi', varlikId: String(p), eylem: 'ODEME_GERI_AL' } })
     expect(d.sonra).toEqual({ nedenGirildi: true })
   })
@@ -281,5 +283,56 @@ describe('iptal', () => {
     await paketIptal(p, 2, 'Fesih sonrası iptal', TEST_BAGLAMI, BUGUN)
     expect((await taksit(subat.id)).durum).toBe('IPTAL')
     expect(await paketSurumu(p)).toBe(3)
+  })
+
+  it('damga kaydı iptali kesinleştirmeyle yarışmaz: kesinleştirme payı düşürürken iptal bekler ve KULLANILDI ile reddedilir', async () => {
+    const { s } = await hesaplanmisPaket()
+    const d = await prisma.damgaKaydi.findFirstOrThrow({ where: { sozlesmeId: s, olay: 'ILK' } })
+    let birak!: () => void
+    const kapi = new Promise<void>((r) => { birak = r })
+    let kilitlendi!: () => void
+    const kilit = new Promise<void>((r) => { kilitlendi = r })
+    // Kesinleştirmenin ortası: sözleşme ve damga payı kilitli, kalan düşürülmüş, henüz commit yok.
+    const kesinlestirme = prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM sozlesme WHERE id = ${s} FOR UPDATE`
+      await tx.$executeRaw`UPDATE damga_payi SET kalan = 0 WHERE damga_kaydi_id = ${d.id}`
+      kilitlendi()
+      await kapi
+    }, { timeout: 30_000 })
+    await kilit
+    const iptal = damgaKaydiIptal(d.id, d.version, 'Sistem dışında ödendi', TEST_BAGLAMI).then(() => null, (e: unknown) => e)
+    await new Promise((r) => setTimeout(r, 500))
+    birak()
+    await kesinlestirme
+    expect(((await iptal) as IsKuraliHatasi | null)?.kod).toBe('KULLANILDI')
+    expect((await prisma.damgaKaydi.findUniqueOrThrow({ where: { id: d.id } })).iptal).toBe(false)
+  })
+
+  it('gerçek iptal yolu (odak 1): kesinleşmiş paketteki taksite bedel değişikliğiyle FARK açılır; FARK tahakkuk etmemişse iptalde FARK iptal, ana taksit yeni bedel', async () => {
+    const { s, p, subat } = await hesaplanmisPaket()
+    await paketKesinlestir(p, 1, TEST_BAGLAMI, BUGUN)
+    const sz = await prisma.sozlesme.findUniqueOrThrow({ where: { id: s } })
+    await kiraBedeliDegistir(s, sz.version, { baslangic: t('2026-02-01'), bedel: para('12000'), kaynak: 'ANLASMA', aciklama: 'Ek protokol 1' }, TEST_BAGLAMI, BUGUN)
+    const fark = await prisma.taksit.findFirstOrThrow({ where: { anaTaksitId: subat.id, tur: 'FARK' } })
+    expect([fark.durum, fark.tutar.toFixed(2), (await taksit(subat.id)).tutar.toFixed(2)]).toEqual(['PLANLANDI', '2000.00', '10000.00'])
+    await paketIptal(p, 2, 'Tutar değişti', TEST_BAGLAMI, BUGUN)
+    const aktif = await prisma.taksit.findMany({ where: { sozlesmeId: s, donemBaslangic: new Date('2026-02-01'), durum: { not: 'IPTAL' } } })
+    expect(aktif.map((x) => [x.id, x.tur, x.durum, x.tutar.toFixed(2)])).toEqual([[subat.id, 'NORMAL', 'PLANLANDI', '12000.00']])
+    expect((await taksit(fark.id)).durum).toBe('IPTAL')
+  })
+
+  it('gerçek iptal yolu (odak 1): FARK ayrı kesinleşmiş pakette (tahakkuk etmiş) ise iptal edilen paketin ana taksiti 10.000 de donar; toplam yeni bedel', async () => {
+    const { s, p, subat } = await hesaplanmisPaket()
+    await paketKesinlestir(p, 1, TEST_BAGLAMI, BUGUN)
+    const sz = await prisma.sozlesme.findUniqueOrThrow({ where: { id: s } })
+    await kiraBedeliDegistir(s, sz.version, { baslangic: t('2026-02-01'), bedel: para('12000'), kaynak: 'ANLASMA', aciklama: 'Ek protokol 1' }, TEST_BAGLAMI, BUGUN)
+    const fark = await prisma.taksit.findFirstOrThrow({ where: { anaTaksitId: subat.id, tur: 'FARK' } })
+    const p2 = await paketKur(h, { ad: 'Fark paketi' })
+    expect((await prisma.paketTaksit.findMany({ where: { paketId: p2 } })).map((x) => x.taksitId)).toEqual([fark.id])
+    await paketHesapla(p2, 0, TEST_BAGLAMI, BUGUN)
+    await paketKesinlestir(p2, 1, TEST_BAGLAMI, BUGUN)
+    await paketIptal(p, 2, 'Yanlış liste', TEST_BAGLAMI, BUGUN)
+    const aktif = await prisma.taksit.findMany({ where: { sozlesmeId: s, donemBaslangic: new Date('2026-02-01'), durum: { not: 'IPTAL' } }, orderBy: { id: 'asc' } })
+    expect(aktif.map((x) => [x.tur, x.durum, x.tutar.toFixed(2)])).toEqual([['NORMAL', 'PLANLANDI', '10000.00'], ['FARK', 'PAKETTE', '2000.00']])
   })
 })

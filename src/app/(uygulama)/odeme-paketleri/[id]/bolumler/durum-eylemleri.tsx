@@ -40,6 +40,7 @@ export function DurumEylemleriBolumu({ p, bugun }: { p: PaketDetayi; bugun: Tari
         <div><dt className="text-slate-500">Ödeme emri</dt><dd>{p.muhasebeOdemeEmriNo ? <>{p.muhasebeOdemeEmriNo} · <TarihMetni deger={p.muhasebeOdemeEmriTarihi} /></> : '—'}</dd></div>
         <div><dt className="text-slate-500">Ödeme</dt><dd><TarihMetni deger={p.odemeTarihi} /></dd></div>
         <div><dt className="text-slate-500">İptal</dt><dd>{p.iptalNedeni ?? '—'}</dd></div>
+        {p.odemeGeriAlmaNedeni ? <div className="md:col-span-4"><dt className="text-slate-500">Ödeme geri alındı (son)</dt><dd>{p.odemeGeriAlmaNedeni}</dd></div> : null}
       </dl>
       <div className="flex flex-wrap items-start gap-4">
         {p.durum === 'HESAPLANDI' && hataYok ? (

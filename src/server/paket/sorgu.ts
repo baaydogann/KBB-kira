@@ -92,7 +92,7 @@ export async function paketDetayi(id: number, bugun: Tarih = bugunIstanbul()) {
     id: p.id, version: p.version, ad: p.ad, durum: p.durum, birim: p.birim,
     vadeBaslangic: tarihDb(p.vadeBaslangic), vadeBitis: tarihDb(p.vadeBitis), kalanOdenek: p.kalanOdenek === null ? null : paraYaz(paraDb(p.kalanOdenek)),
     hesapTarihi: tarihDbOpt(p.hesapTarihi), muhasebeOdemeEmriNo: p.muhasebeOdemeEmriNo, muhasebeOdemeEmriTarihi: tarihDbOpt(p.muhasebeOdemeEmriTarihi),
-    odemeTarihi: tarihDbOpt(p.odemeTarihi), iptalNedeni: p.iptalNedeni, kesinlesmeZamani: p.kesinlesmeZamani,
+    odemeTarihi: tarihDbOpt(p.odemeTarihi), iptalNedeni: p.iptalNedeni, kesinlesmeZamani: p.kesinlesmeZamani, odemeGeriAlmaNedeni: p.odemeGeriAlmaNedeni,
     taksitler: sirali.map((pt) => ({
       taksitId: pt.taksitId, sozlesmeId: pt.taksit.sozlesmeId, sozlesmeNo: pt.taksit.sozlesme.sozlesmeNo, kisaAd: pt.taksit.sozlesme.tasinmaz.kisaAd,
       tur: pt.taksit.tur, donemBaslangic: tarihDb(pt.taksit.donemBaslangic), donemBitis: tarihDb(pt.taksit.donemBitis), vade: tarihDb(pt.taksit.vadeTarihi),

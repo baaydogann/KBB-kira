@@ -286,14 +286,17 @@ export async function paketIptal(paketId: number, version: number, neden: string
   }, ZAMAN_ASIMI)
 }
 
-/** Yanlış "ödendi" kaydı ya da bankadan dönen ödeme: ODENDI → ODEME_EMRINDE, taksitler ODEME_EMRINDE, odemeTarihi silinir. */
+/**
+ * Yanlış "ödendi" kaydı ya da bankadan dönen ödeme: ODENDI → ODEME_EMRINDE, taksitler ODEME_EMRINDE, odemeTarihi silinir. Gerekçe pakette
+ * saklanır (son geri alma; zaman çizelgesinde görünür), denetim satırına yalnızca girildiği yazılır.
+ */
 export async function paketOdemeGeriAl(paketId: number, version: number, neden: string, baglam: IslemBaglami): Promise<void> {
-  nedenDenetle(neden, 'Geri alma nedeni')
+  const n = nedenDenetle(neden, 'Geri alma nedeni')
   await prisma.$transaction(async (tx) => {
     const { p, taksitIdleri } = await paketiKilitle(tx, paketId)
     durumDenetle(p, version, 'ODENDI', 'Yalnızca ödenmiş paketin ödemesi geri alınır.')
     await taksitleriGecir(tx, taksitIdleri, ['ODENDI'], { durum: 'ODEME_EMRINDE', odemeTarihi: null })
-    await paketiGuncelle(tx, paketId, version, { durum: 'ODEME_EMRINDE', odemeTarihi: null })
+    await paketiGuncelle(tx, paketId, version, { durum: 'ODEME_EMRINDE', odemeTarihi: null, odemeGeriAlmaNedeni: n })
     await denetimKaydi(tx, baglam, { varlik: 'odeme_paketi', varlikId: paketId, eylem: 'ODEME_GERI_AL', sonra: { nedenGirildi: true } })
   }, ZAMAN_ASIMI)
 }

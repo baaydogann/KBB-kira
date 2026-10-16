@@ -148,8 +148,13 @@ export async function damgaKaydiIptal(id: number, version: number, neden: string
   if (metin.length === 0) throw new IsKuraliHatasi('NEDEN', 'İptal nedenini yazın.', 'neden')
   if (metin.length > 500) throw new IsKuraliHatasi('NEDEN', 'İptal nedeni en çok 500 karakter olabilir.', 'neden')
   await prisma.$transaction(async (tx) => {
-    const d = await tx.damgaKaydi.findUnique({ where: { id }, include: { paylar: true } })
-    if (!d) throw new BulunamadiHatasi('Damga kaydı bulunamadı.')
+    const kayit = await tx.damgaKaydi.findUnique({ where: { id }, select: { sozlesmeId: true } })
+    if (!kayit) throw new BulunamadiHatasi('Damga kaydı bulunamadı.')
+    // Kesinleştirmeyle aynı sıra (sözleşme → damga payı): kalan denetimi kilit altında yapılır; aksi halde eşzamanlı kesinleştirme payı
+    // düşürürken iptal eski kalanı görüp geçer ve damga iki kez tahsil edilir (kesinti + malik beyanı).
+    await tx.$queryRaw`SELECT id FROM sozlesme WHERE id = ${kayit.sozlesmeId} FOR UPDATE`
+    await tx.$queryRaw`SELECT id FROM damga_payi WHERE damga_kaydi_id = ${id} ORDER BY id FOR UPDATE`
+    const d = await tx.damgaKaydi.findUniqueOrThrow({ where: { id }, include: { paylar: true } })
     if (d.iptal) throw new IsKuraliHatasi('DURUM', 'Damga kaydı zaten iptal edilmiş.')
     if (d.tahsil === 'ISTIHKAKTAN' && d.paylar.some((p) => paraDb(p.kalan).lessThan(paraDb(p.tutar)))) {
       throw new IsKuraliHatasi('KULLANILDI', 'Bu damga kaydından kesinti yapıldı; önce ilgili paketi iptal edin.')
