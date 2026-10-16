@@ -57,6 +57,7 @@ export const TAMSAYI_PARAMETRELERI: ReadonlySet<string> = new Set([
   'HATIRLATMA_UZAMA10_ONCE_AY', 'HATIRLATMA_MEVZUAT_ONCE_GUN',
   'TAKVIM_UFUK_AY', 'ARTIS_HESAP_UFUK_GUN', 'FARK_VADE_GUN',
   'SURE_22A_GECERLILIK_GUN', 'DAMGA_SURESIZ_AY',
+  'HATIRLATMA_22A_ONCE_GUN', 'HATIRLATMA_MUHTASAR_GORUNUR_GUN', 'MUHTASAR_SON_GUN', 'DAMGA_MALIK_BEYAN_GUN',
 ])
 
 export async function hatirlatmaAyarlari(tarih: Tarih, db: Tx = prisma): Promise<HatirlatmaAyarlari> {
@@ -74,6 +75,10 @@ export async function hatirlatmaAyarlari(tarih: Tarih, db: Tx = prisma): Promise
     tespitOnceAy: await s('HATIRLATMA_TESPIT_ONCE_AY'),
     uzama10OnceAy: await s('HATIRLATMA_UZAMA10_ONCE_AY'),
     mevzuatOnceGun: await s('HATIRLATMA_MEVZUAT_ONCE_GUN'),
+    sorguOnceGun: await s('HATIRLATMA_22A_ONCE_GUN'),
+    muhtasarGorunurGun: await s('HATIRLATMA_MUHTASAR_GORUNUR_GUN'),
+    muhtasarSonGun: await s('MUHTASAR_SON_GUN'),
+    damgaBeyanGun: await s('DAMGA_MALIK_BEYAN_GUN'),
   }
 }
 

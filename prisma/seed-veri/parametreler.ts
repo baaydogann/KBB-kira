@@ -57,6 +57,10 @@ export const PARAMETRELER: ParametreTohumu[] = [
   { anahtar: 'HATIRLATMA_TESPIT_ONCE_AY', deger: '6', yururlukBaslangic: H, mevzuatDayanagi: 'TBK 344/3' },
   { anahtar: 'HATIRLATMA_UZAMA10_ONCE_AY', deger: '3', yururlukBaslangic: H, mevzuatDayanagi: 'TBK 347/1' },
   { anahtar: 'HATIRLATMA_MEVZUAT_ONCE_GUN', deger: '30', yururlukBaslangic: H },
+  { anahtar: 'HATIRLATMA_22A_ONCE_GUN', deger: '3', yururlukBaslangic: H, mevzuatDayanagi: 'spec §9 H3' },
+  { anahtar: 'HATIRLATMA_MUHTASAR_GORUNUR_GUN', deger: '20', yururlukBaslangic: H, mevzuatDayanagi: 'spec §9 H9' },
+  { anahtar: 'MUHTASAR_SON_GUN', deger: '26', yururlukBaslangic: H, mevzuatDayanagi: 'GVK 98' },
+  { anahtar: 'DAMGA_MALIK_BEYAN_GUN', deger: '15', yururlukBaslangic: H, mevzuatDayanagi: 'DVK 22/b' },
   { anahtar: 'IDARE_ADI', deger: 'Konya Büyükşehir Belediyesi', yururlukBaslangic: H, aciklama: 'Ödeme emri hazırlık föyü başlığı' },
   { anahtar: 'IDARE_VKN', deger: 'GIRILMEDI', yururlukBaslangic: H, aciklama: 'Kurumun vergi kimlik numarası; kurulumda girilir (föy başlığı)' },
   {

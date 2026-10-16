@@ -7,7 +7,7 @@ import { tarih as t } from '@/core/tarih'
 import { tokenOzeti } from '@/server/auth/oturum'
 import { dbTarih } from '@/server/donustur'
 import { ortam } from '@/server/env'
-import { icsTokenIptal, icsTokenUret, takvimIcerigi, takvimUrl } from '@/server/takvim/servis'
+import { MOTOR_KURALLARI, icsTokenIptal, icsTokenUret, takvimIcerigi, takvimUrl } from '@/server/takvim/servis'
 import { TAKVIM_ISTEK_GUNLUGU_HARIC } from '@/server/takvim/yol'
 import { hatirlatmalariUretVeKaydet } from '@/server/hatirlatma/servis'
 import { sozlesmeAktiflestir, sozlesmeTaslakKaydet } from '@/server/sozlesme/servis'
@@ -211,11 +211,25 @@ describe('.ics takvim', () => {
     expect(ics).not.toMatch(/\d[.\d]*\\?,\d{2}/)
   })
 
-  it('H1 hariç her motor kuralı (OTOMATIK_KURALLAR + H13) kendi açıklamasını korur; H1 sabit açıklama alır', async () => {
+  it('MOTOR_KURALLARI H3 ü içermez; H9 ve H10 u içerir', () => {
+    expect([MOTOR_KURALLARI.has('H3'), MOTOR_KURALLARI.has('H1'), MOTOR_KURALLARI.has('H9'), MOTOR_KURALLARI.has('H10'), MOTOR_KURALLARI.has('H13')]).toEqual([false, false, true, true, true])
+  })
+
+  it('H3 akışa sabit başlık ve genel açıklamayla girer (paket adı serbest metindir)', async () => {
+    const kid = await yeniKullanici('h3.sabit')
+    const token = await icsTokenUret(kid, TEST_BAGLAMI)
+    await hatirlatmaEkle({ kural: 'H3', oncelik: 'YUKSEK', baslik: '22/A borç sorgusu gerekli — Ayşe Yılmaz paketi', aciklama: '2 alıcı için sorgu yok' })
+    const ics = (await takvimIcerigi(token, BUGUN))!
+    expect(ics).toContain('SUMMARY:[YUKSEK] 22/A borç sorgusu gerekli\r\n')
+    expect(ics).not.toContain('Ayşe')
+    expect(etkinlik(ics, '22/A borç sorgusu gerekli')).toContain('DESCRIPTION:Ayrıntı için KBB Kira Takip uygulamasında hatırlatmayı açın.\r\n')
+  })
+
+  it('H1 ve H3 hariç her motor kuralı (OTOMATIK_KURALLAR + H13 + H9) kendi açıklamasını korur; H1 sabit açıklama alır', async () => {
     const kid = await yeniKullanici('motor.kurallari')
     const token = await icsTokenUret(kid, TEST_BAGLAMI)
     // Listeden türetilir: motora eklenecek yeni bir kural açıklamasını sessizce kaybederse (genel metne düşerse) bu test düşer.
-    const motor = [...OTOMATIK_KURALLAR.filter((k) => k !== 'H1'), 'H13']
+    const motor = [...OTOMATIK_KURALLAR.filter((k) => k !== 'H1' && k !== 'H3'), 'H13', 'H9']
     expect(motor).toContain('H6_SON_GUN')
     for (const kural of motor) await hatirlatmaEkle({ kural, baslik: `B-${kural}`, aciklama: `Motor-aciklama-${kural}` })
     await hatirlatmaEkle({ kural: 'H1', baslik: 'B-H1', aciklama: 'Dukkan: 10.000,00 ₺, vade 20.10.2026.' })

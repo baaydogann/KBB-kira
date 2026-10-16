@@ -9,11 +9,15 @@ import { tbk347KapsamindaMi, type ArtisKurali, type TasinmazTuru } from './tiple
 export type Oncelik = 'KRITIK' | 'YUKSEK' | 'NORMAL'
 export type HatirlatmaKurali =
   | 'H1' | 'H2' | 'H4' | 'H4_EKSIK' | 'H5' | 'H6' | 'H6_SON_GUN' | 'H6_ARSA' | 'H7' | 'H8' | 'H11' | 'H12' | 'H13'
-/** Üretici bunları kendiliğinden kapatabilir. H13 (mevzuat parametresi) kullanıcı tamamlayana kadar açık kalır. */
+  | 'H3' | 'H9' | 'H10'
+/**
+ * Üretici bunları kendiliğinden kapatabilir. H13 (mevzuat parametresi) ve H9 (muhtasar beyanı: dönem geçince koşulu kalkmaz, beyan
+ * verildiğini yalnızca kullanıcı bilir) kullanıcı tamamlayana kadar açık kalır.
+ */
 export const OTOMATIK_KURALLAR: readonly HatirlatmaKurali[] = [
-  'H1', 'H2', 'H4', 'H4_EKSIK', 'H5', 'H6', 'H6_SON_GUN', 'H6_ARSA', 'H7', 'H8', 'H11', 'H12',
+  'H1', 'H2', 'H4', 'H4_EKSIK', 'H5', 'H6', 'H6_SON_GUN', 'H6_ARSA', 'H7', 'H8', 'H11', 'H12', 'H3', 'H10',
 ]
-export type IliskiliTur = 'sozlesme' | 'taksit' | 'endeks' | 'parametre' | 'sistem'
+export type IliskiliTur = 'sozlesme' | 'taksit' | 'endeks' | 'parametre' | 'sistem' | 'paket' | 'damga'
 
 export interface HatirlatmaAdayi {
   anahtar: string
@@ -42,6 +46,10 @@ export interface HatirlatmaAyarlari {
   tespitOnceAy: number
   uzama10OnceAy: number
   mevzuatOnceGun: number
+  sorguOnceGun: number
+  muhtasarGorunurGun: number
+  muhtasarSonGun: number
+  damgaBeyanGun: number
 }
 
 export type EksikVeri = 'IBAN_YOK' | 'HISSE_TOPLAMI' | 'SOZLESME_PDF_YOK' | 'STATU_TEYIT' | 'ONAY_BELGESI_YOK'
@@ -86,6 +94,8 @@ export interface TaksitOzeti {
   kisaAd: string
   vade: Tarih
   tutar: string
+  /** PAKETTE / ODEME_EMRINDE: H1 sürer, ödeme emri hazırlığı (H2) artık gerekmez. */
+  odemeSurecinde: boolean
 }
 /** Aktifleştirilmemiş sözleşme taslağı (loader yalnızca başlangıcına `TASLAK_HATIRLATMA_GUN` ya da daha az kalanları verir). */
 export interface TaslakOzeti { id: string; no: string; kisaAd: string; baslangic: Tarih }
@@ -96,17 +106,28 @@ export interface EndeksOzeti { id: string; seri: string; ay: Ay }
 /** Yürürlük kaydı. Loader her anahtar için yalnızca ardılı olmayan (en son) yürürlük kaydını verir. */
 export interface ParametreBitisi { anahtar: string; yururlukBitis: Tarih }
 
+/** Hesaplanmış ya da kesinleşmiş (ödenmemiş) paketin 22/A durumu: bugün geçerli sorgusu olmayan alıcı sayısı ve en yakın sorgu bitişi. */
+export interface Paket22aOzeti { paketId: string; paketAdi: string; eksikSorguSayisi: number; enYakinBitis: Tarih | null }
+/** Önceki ay ödenen paketlerde muhtasara girecek kesinti var mı. */
+export interface MuhtasarOzeti { donem: Ay; stopajVar: boolean; damgaVar: boolean }
+/** Malik beyanlı, makbuzu yüklenmemiş damga kaydı. */
+export interface DamgaBeyanOzeti { damgaKaydiId: string; sozlesmeId: string; sozlesmeNo: string; kisaAd: string; olayTarihi: Tarih }
+
 export interface HatirlatmaVerisi {
   bugun: Tarih
   tatiller: ReadonlySet<string>
   ayarlar: HatirlatmaAyarlari
   sozlesmeler: readonly SozlesmeOzeti[]
-  planliTaksitler: readonly TaksitOzeti[]
+  /** PLANLANDI, PAKETTE ve ODEME_EMRINDE taksitler. */
+  taksitler: readonly TaksitOzeti[]
   artislar: readonly ArtisOzeti[]
   bekleyenEndeksler: readonly EndeksOzeti[]
   sonOnayliTufe12Ayi: Ay | null
   parametreBitisleri: readonly ParametreBitisi[]
   taslaklar: readonly TaslakOzeti[]
+  paketler22a: readonly Paket22aOzeti[]
+  muhtasar: MuhtasarOzeti | null
+  damgaBeyanlari: readonly DamgaBeyanOzeti[]
 }
 
 type Ekle = (a: HatirlatmaAdayi) => void
@@ -121,22 +142,23 @@ export function hatirlatmalariUret(v: HatirlatmaVerisi): HatirlatmaAdayi[] {
   for (const s of v.sozlesmeler) sozlesmeKurallari(v, s, ekle)
   for (const s of v.taslaklar) taslakKurali(v, s, ekle)
   sistemKurallari(v, ekle)
+  paketKurallari(v, ekle)
   return sonuc
 }
 
 function odemeKurallari(v: HatirlatmaVerisi, ekle: Ekle): void {
   const a = v.ayarlar
-  for (const t of v.planliTaksitler) {
+  for (const t of v.taksitler) {
     const kalan = gunFarki(v.bugun, t.vade)
     const gecikmis = kalan < 0
     ekle({
       anahtar: `H1:taksit:${t.id}:${t.vade}`, kural: 'H1', iliskiliTur: 'taksit', iliskiliId: t.id, sozlesmeId: t.sozlesmeId,
       baslik: gecikmis ? `Gecikmiş kira ödemesi — ${t.sozlesmeNo}` : `Kira ödemesi — ${t.sozlesmeNo}`,
-      aciklama: `${t.kisaAd}: ${formatTL(para(t.tutar))}, vade ${formatTarih(t.vade)}${gecikmis ? ` (${-kalan} gün gecikti)` : ''}.`,
+      aciklama: `${t.kisaAd}: ${formatTL(para(t.tutar))}, vade ${formatTarih(t.vade)}${gecikmis ? ` (${-kalan} gün gecikti)` : ''}.${t.odemeSurecinde ? ' Ödeme sürecinde (paket kesinleşti).' : ''}`,
       hedefTarih: t.vade, gorunurTarih: gunEkle(t.vade, -a.vadeGorunurGun),
       oncelik: gecikmis ? 'KRITIK' : kalan <= a.vadeYuksekGun ? 'YUKSEK' : 'NORMAL', kararGerekli: false,
     })
-    if (gecikmis) continue
+    if (gecikmis || t.odemeSurecinde) continue
     const hedef = isGunuEkle(t.vade, -a.odemeEmriIsGunu, v.tatiller)
     ekle({
       anahtar: `H2:taksit:${t.id}:${hedef}`, kural: 'H2', iliskiliTur: 'taksit', iliskiliId: t.id, sozlesmeId: t.sozlesmeId,
@@ -339,6 +361,50 @@ function sistemKurallari(v: HatirlatmaVerisi, ekle: Ekle): void {
         : `${formatTarih(p.yururlukBitis)} sonrası için yeni değer girilmedi. Güncel mevzuatı kontrol edip yeni yürürlük kaydı ekleyin.`,
       hedefTarih: p.yururlukBitis, gorunurTarih: gunEkle(p.yururlukBitis, -v.ayarlar.mevzuatOnceGun),
       oncelik: doldu ? 'KRITIK' : 'NORMAL', kararGerekli: true,
+    })
+  }
+}
+
+/** F2: H3 (22/A sorgusu), H9 (muhtasar beyanı), H10 (malik beyanlı damga makbuzu). */
+function paketKurallari(v: HatirlatmaVerisi, ekle: Ekle): void {
+  const a = v.ayarlar
+  for (const p of v.paketler22a) {
+    if (p.eksikSorguSayisi > 0) {
+      ekle({
+        anahtar: `H3:paket:${p.paketId}:SORGU_YOK`, kural: 'H3', iliskiliTur: 'paket', iliskiliId: p.paketId, sozlesmeId: null,
+        baslik: `22/A borç sorgusu gerekli — ${p.paketAdi}`,
+        aciklama: `${p.eksikSorguSayisi} alıcı için bugün geçerli 22/A borç sorgusu yok (6183 md. 22/A). Sorguyu kişi sayfasından girin. Borç çıkmazsa ödeme emri yeni sorguyla girilebilir; borç çıkarsa paketi (kesinleşmişse iptal edip) yeniden hesaplayın.`,
+        hedefTarih: v.bugun, gorunurTarih: v.bugun, oncelik: 'YUKSEK', kararGerekli: false,
+      })
+    }
+    if (p.enYakinBitis !== null && karsilastir(p.enYakinBitis, v.bugun) >= 0) {
+      ekle({
+        anahtar: `H3:paket:${p.paketId}:${p.enYakinBitis}`, kural: 'H3', iliskiliTur: 'paket', iliskiliId: p.paketId, sozlesmeId: null,
+        baslik: `22/A borç sorgusu gerekli — ${p.paketAdi}`,
+        aciklama: `22/A borç sorgusunun geçerliliği ${formatTarih(p.enYakinBitis)} tarihinde bitiyor; ödeme o güne kadar yapılmayacaksa sorguyu yenileyin.`,
+        hedefTarih: p.enYakinBitis, gorunurTarih: gunEkle(p.enYakinBitis, -a.sorguOnceGun), oncelik: 'YUKSEK', kararGerekli: false,
+      })
+    }
+  }
+  const m = v.muhtasar
+  if (m !== null && (m.stopajVar || m.damgaVar)) {
+    const { yil, ay } = parcala(v.bugun)
+    const kalemler = [...(m.stopajVar ? ['Gelir vergisi stopajı'] : []), ...(m.damgaVar ? ['İstihkaktan kesilen damga vergisi'] : [])]
+    ekle({
+      anahtar: `H9:sistem:muhtasar:${ayAnahtari(m.donem)}`, kural: 'H9', iliskiliTur: 'sistem', iliskiliId: 'muhtasar', sozlesmeId: null,
+      baslik: `Muhtasar beyanı — ${ayAdi(m.donem)} ödemeleri`,
+      aciklama: `${kalemler.join(' ve ')} muhtasar ve prim hizmet beyannamesiyle bildirilmeli. Listeyi Raporlar ekranından alın.`,
+      hedefTarih: sonrakiIsGunu(birlestir(yil, ay, a.muhtasarSonGun), v.tatiller), gorunurTarih: birlestir(yil, ay, a.muhtasarGorunurGun),
+      oncelik: 'YUKSEK', kararGerekli: false,
+    })
+  }
+  for (const d of v.damgaBeyanlari) {
+    const hedef = sonrakiIsGunu(gunEkle(d.olayTarihi, a.damgaBeyanGun), v.tatiller)
+    ekle({
+      anahtar: `H10:damga:${d.damgaKaydiId}:${hedef}`, kural: 'H10', iliskiliTur: 'damga', iliskiliId: d.damgaKaydiId, sozlesmeId: d.sozlesmeId,
+      baslik: `Damga vergisi makbuzu bekleniyor — ${d.sozlesmeNo}`,
+      aciklama: `${d.kisaAd}: malik damga vergisini ${formatTarih(hedef)} tarihine kadar beyan edip ödemeli (DVK 22); makbuzu sözleşmenin Damga sekmesine yükleyin.`,
+      hedefTarih: hedef, gorunurTarih: d.olayTarihi, oncelik: karsilastir(v.bugun, hedef) > 0 ? 'KRITIK' : 'YUKSEK', kararGerekli: false,
     })
   }
 }

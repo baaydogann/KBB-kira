@@ -4,30 +4,15 @@ import type { PanoSatiri } from '@/server/hatirlatma/servis'
 import { Rozet, type RozetTonu } from './ui/rozet'
 import { EylemFormu, type EylemAlani } from './eylem-formu'
 import { erteleAction, tamamlaAction } from '@/app/(uygulama)/actions'
+import { hatirlatmaAdresi } from '@/app/_lib/hatirlatma-adresi'
 
 const TON: Record<PanoSatiri['oncelik'], RozetTonu> = { KRITIK: 'kirmizi', YUKSEK: 'sari', NORMAL: 'mavi' }
-
-/** Kuralın bağlandığı sözleşme sekmesi. Tabloda olmayan (motor dışı ya da gelecekteki) kurallar sözleşmenin ilk sekmesine gider. */
-const KURAL_SEKMESI: ReadonlyMap<string, string> = new Map([
-  ['H1', 'taksitler'], ['H2', 'taksitler'], ['H5_FAZLA_ODEME', 'taksitler'], ['H5', 'donemler'], ['ARTIS_HESAP_HATA', 'donemler'],
-  ['DAMGA_HATA', 'damga'],
-])
-
-function hedefAdresi(h: Pick<PanoSatiri, 'sozlesmeId' | 'kural' | 'iliskiliTur'>): string | null {
-  if (h.sozlesmeId !== null) {
-    const sekme = KURAL_SEKMESI.get(h.kural)
-    return `/sozlesmeler/${h.sozlesmeId}${sekme ? `?sekme=${sekme}` : ''}`
-  }
-  if (h.iliskiliTur === 'endeks') return '/endeksler'
-  if (h.iliskiliTur === 'parametre') return '/yonetim/parametreler'
-  return null
-}
 
 const TAMAMLA_ALANLARI: EylemAlani[] = [{ ad: 'not', etiket: 'Not', yerTutucu: 'Not (isteğe bağlı)' }]
 const ERTELE_ALANLARI: EylemAlani[] = [{ ad: 'tarih', etiket: 'Erteleme tarihi', tur: 'date', zorunlu: true }]
 
-export function HatirlatmaSatiri({ h }: { h: Pick<PanoSatiri, 'id' | 'baslik' | 'aciklama' | 'hedef' | 'oncelik' | 'sozlesmeId' | 'kural' | 'iliskiliTur'> & { tatileDenk?: boolean } }) {
-  const hedefUrl = hedefAdresi(h)
+export function HatirlatmaSatiri({ h }: { h: Pick<PanoSatiri, 'id' | 'baslik' | 'aciklama' | 'hedef' | 'oncelik' | 'sozlesmeId' | 'kural' | 'iliskiliTur' | 'iliskiliId'> & { tatileDenk?: boolean } }) {
+  const hedefUrl = hatirlatmaAdresi(h)
   return (
     <li className="flex flex-wrap items-start gap-3 border-b border-slate-100 px-3 py-2 last:border-0">
       <Rozet ton={TON[h.oncelik]}>{h.oncelik}</Rozet>

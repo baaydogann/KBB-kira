@@ -2,7 +2,8 @@ import { hisseToplamiBirMi } from '@/core/hisse'
 import {
   hatirlatmalariUret, OTOMATIK_KURALLAR, TASLAK_HATIRLATMA_GUN, type EksikVeri, type HatirlatmaAdayi, type HatirlatmaVerisi, type Oncelik,
 } from '@/core/hatirlatma'
-import { bugunIstanbul, gunEkle, icindeMi, isGunuMu, karsilastir, type Ay, type Tarih } from '@/core/tarih'
+import { SIFIR } from '@/core/para'
+import { ayKaydir, birlestir, bugunIstanbul, gunEkle, icindeMi, isGunuMu, karsilastir, tarihinAyi, type Ay, type Tarih } from '@/core/tarih'
 import type { IslemBaglami } from '../baglam'
 import { prisma, type Tx } from '../db'
 import { denetimKaydi } from '../denetim'
@@ -10,6 +11,8 @@ import { dbTarih, tarihDb, tarihDbOpt } from '../donustur'
 import { artisIcinYururluk, artisYururlukSorgusu, ilkDonemArtisBekliyorMu } from '../artis/servis'
 import { onayliOranlariYukle } from '../endeks/oranlar'
 import { BulunamadiHatasi, CakismaHatasi, IsKuraliHatasi } from '../hata'
+import { gecerliSorgu } from '../kesinti/servis'
+import type { PaketOnKontrolKaydi } from '../paket/hesapla'
 import { hatirlatmaAyarlari, parametreBitisleri, statuKurallari } from '../parametre/servis'
 import { tatilKumesi } from '../tatil/servis'
 
@@ -42,7 +45,7 @@ export async function hatirlatmaVerisiYukle(tx: Tx, bugun: Tarih): Promise<Hatir
     tx.belge.groupBy({ by: ['sahipId'], where: { sahipTur: 'sozlesme', belgeTuru: 'SOZLESME', sahipId: { in: ids } } }),
     // Taksit hatırlatmaları sözleşme durumundan bağımsızdır: sona ermiş/feshedilmiş sözleşmenin ödenmemiş taksiti de hatırlatılır.
     tx.taksit.findMany({
-      where: { durum: 'PLANLANDI', vadeTarihi: { lte: dbTarih(taksitUfku) }, sozlesme: { durum: { not: 'TASLAK' } } },
+      where: { durum: { in: ['PLANLANDI', 'PAKETTE', 'ODEME_EMRINDE'] }, vadeTarihi: { lte: dbTarih(taksitUfku) }, sozlesme: { durum: { not: 'TASLAK' } } },
       include: { sozlesme: { select: { sozlesmeNo: true, tasinmaz: { select: { kisaAd: true } } } } },
     }),
     tx.artisHesabi.findMany({ where: { sozlesmeId: { in: ids }, durum: { not: 'IPTAL' } } }),
@@ -54,6 +57,15 @@ export async function hatirlatmaVerisiYukle(tx: Tx, bugun: Tarih): Promise<Hatir
   ])
   const pdfVar = new Set(pdfler.map((p) => p.sahipId))
   return {
+    paketler22a: await paketler22aYukle(tx, bugun),
+    muhtasar: await muhtasarYukle(tx, bugun),
+    damgaBeyanlari: (await tx.damgaKaydi.findMany({
+      where: { tahsil: 'MALIK_BEYAN', makbuzBelgeId: null, iptal: false, sozlesme: { durum: { not: 'TASLAK' } } },
+      select: { id: true, sozlesmeId: true, olayTarihi: true, sozlesme: { select: { sozlesmeNo: true, tasinmaz: { select: { kisaAd: true } } } } },
+    })).map((d) => ({
+      damgaKaydiId: String(d.id), sozlesmeId: String(d.sozlesmeId), sozlesmeNo: d.sozlesme.sozlesmeNo, kisaAd: d.sozlesme.tasinmaz.kisaAd,
+      olayTarihi: tarihDb(d.olayTarihi),
+    })),
     bugun, tatiller, ayarlar,
     sozlesmeler: (await Promise.all(sozlesmeler.map(async (s) => {
       const yururluk = artisIcinYururluk(s, bugun)
@@ -77,9 +89,9 @@ export async function hatirlatmaVerisiYukle(tx: Tx, bugun: Tarih): Promise<Hatir
         sonaErmekte: yururluk.sonaErmekte, bitisEtkin: yururluk.bitisEtkin, ilkDonemArtisBekliyor: await ilkDonemArtisBekliyorMu(tx, s, s.kiraDonemleri[0]),
       }]
     }))).flat(),
-    planliTaksitler: taksitler.map((x) => ({
+    taksitler: taksitler.map((x) => ({
       id: String(x.id), sozlesmeId: String(x.sozlesmeId), sozlesmeNo: x.sozlesme.sozlesmeNo, kisaAd: x.sozlesme.tasinmaz.kisaAd,
-      vade: tarihDb(x.vadeTarihi), tutar: x.tutar.toFixed(2),
+      vade: tarihDb(x.vadeTarihi), tutar: x.tutar.toFixed(2), odemeSurecinde: x.durum !== 'PLANLANDI',
     })),
     artislar: artislar.flatMap((a) => (a.durum === 'IPTAL' ? [] : [{ sozlesmeId: String(a.sozlesmeId), donemBaslangic: tarihDb(a.donemBaslangic), durum: a.durum }])),
     bekleyenEndeksler: bekleyen.map((e) => ({ id: String(e.id), seri: e.seri, ay: { yil: e.yil, ay: e.ay } })),
@@ -87,6 +99,33 @@ export async function hatirlatmaVerisiYukle(tx: Tx, bugun: Tarih): Promise<Hatir
     parametreBitisleri: bitisler,
     taslaklar: taslaklar.map((x) => ({ id: String(x.id), no: x.sozlesmeNo, kisaAd: x.tasinmaz.kisaAd, baslangic: tarihDb(x.baslangic) })),
   }
+}
+
+/** Hesaplanmış ya da kesinleşmiş (ödenmemiş) paketlerde 22/A sorgusu gereken alıcıların bugünkü sorgu durumu (H3). */
+async function paketler22aYukle(tx: Tx, bugun: Tarih) {
+  const paketler = await tx.odemePaketi.findMany({ where: { durum: { in: ['HESAPLANDI', 'KESINLESTI', 'ODEME_EMRINDE'] } }, select: { id: true, ad: true, onKontrol: true } })
+  const sonuc = []
+  for (const p of paketler) {
+    const gerekli = ((p.onKontrol ?? { alicilar22a: [] }) as unknown as Pick<PaketOnKontrolKaydi, 'alicilar22a'>).alicilar22a.filter((a) => a.sorguGerekli)
+    if (gerekli.length === 0) continue
+    const sorgular = await Promise.all(gerekli.map((a) => gecerliSorgu(tx, Number(a.kisiId), bugun)))
+    const bitisler = sorgular.flatMap((x) => (x === null ? [] : [tarihDb(x.gecerlilikBitis)])).sort()
+    sonuc.push({ paketId: String(p.id), paketAdi: p.ad, eksikSorguSayisi: sorgular.filter((x) => x === null).length, enYakinBitis: bitisler[0] ?? null })
+  }
+  return sonuc
+}
+
+/** Önceki ayda ödenen paketlerde stopaj ya da istihkaktan damga kesintisi var mı (H9 muhtasar). */
+async function muhtasarYukle(tx: Tx, bugun: Tarih) {
+  const donem = ayKaydir(tarihinAyi(bugun), -1)
+  const bas = birlestir(donem.yil, donem.ay, 1)
+  const sonraki = ayKaydir(donem, 1)
+  const odenen = { durum: 'ODENDI' as const, odemeTarihi: { gte: dbTarih(bas), lt: dbTarih(birlestir(sonraki.yil, sonraki.ay, 1)) } }
+  const [stopaj, damga] = await Promise.all([
+    tx.taksitDagilim.aggregate({ where: { paket: odenen }, _sum: { stopaj: true } }),
+    tx.dagilimKesinti.count({ where: { tur: 'DAMGA', paket: odenen } }),
+  ])
+  return { donem, stopajVar: (stopaj._sum.stopaj ?? SIFIR).greaterThan(0), damgaVar: damga > 0 }
 }
 
 function satirVerisi(a: HatirlatmaAdayi) {
@@ -194,6 +233,7 @@ export interface PanoSatiri {
   id: number
   kural: string
   iliskiliTur: string
+  iliskiliId: string
   sozlesmeId: number | null
   baslik: string
   aciklama: string
@@ -223,7 +263,7 @@ export async function panoVerisi(bugun: Tarih = bugunIstanbul()): Promise<PanoVe
   const tatiller = vadeler.length === 0 ? new Set<string>() : await tatilKumesi(vadeler[0]!, vadeler.at(-1)!)
   const satirlar: PanoSatiri[] = kayitlar
     .map((k) => ({
-      id: k.id, kural: k.kural, iliskiliTur: k.iliskiliTur, sozlesmeId: k.sozlesmeId, baslik: k.baslik, aciklama: k.aciklama,
+      id: k.id, kural: k.kural, iliskiliTur: k.iliskiliTur, iliskiliId: k.iliskiliId, sozlesmeId: k.sozlesmeId, baslik: k.baslik, aciklama: k.aciklama,
       hedef: tarihDb(k.hedefTarih), ertelenenTarih: tarihDbOpt(k.ertelenenTarih), oncelik: k.oncelik, kararGerekli: k.kararGerekli,
       tatileDenk: k.kural === 'H1' && !isGunuMu(tarihDb(k.hedefTarih), tatiller),
     }))

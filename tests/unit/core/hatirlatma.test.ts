@@ -8,6 +8,7 @@ const AYAR = {
   vadeGorunurGun: 7, vadeYuksekGun: 3, odemeEmriIsGunu: 10, artisOnceGun: 30, bitisGorunurGun: 90,
   bitisYuksekGun: 60, bitisKritikGun: 30, fesihBildirimGun: 15, fesihSonGunGorunurGun: 15,
   tespitOnceAy: 6, uzama10OnceAy: 3, mevzuatOnceGun: 30,
+  sorguOnceGun: 3, muhtasarGorunurGun: 20, muhtasarSonGun: 26, damgaBeyanGun: 15,
 }
 
 function sozlesme(ek: Partial<SozlesmeOzeti> = {}): SozlesmeOzeti {
@@ -23,13 +24,14 @@ function sozlesme(ek: Partial<SozlesmeOzeti> = {}): SozlesmeOzeti {
 function veri(ek: Partial<HatirlatmaVerisi> = {}): HatirlatmaVerisi {
   return {
     bugun: t('2026-10-15'), tatiller: new Set(['2026-10-29']), ayarlar: AYAR,
-    sozlesmeler: [sozlesme()], planliTaksitler: [], artislar: [], bekleyenEndeksler: [],
-    sonOnayliTufe12Ayi: { yil: 2026, ay: 9 }, parametreBitisleri: [], taslaklar: [], ...ek,
+    sozlesmeler: [sozlesme()], taksitler: [], artislar: [], bekleyenEndeksler: [],
+    sonOnayliTufe12Ayi: { yil: 2026, ay: 9 }, parametreBitisleri: [], taslaklar: [],
+    paketler22a: [], muhtasar: null, damgaBeyanlari: [], ...ek,
   }
 }
 
 function taksit(id: string, vade: string, ek: Partial<TaksitOzeti> = {}): TaksitOzeti {
-  return { id, sozlesmeId: '1', sozlesmeNo: 'S-1', kisaAd: 'Meram depo', vade: t(vade), tutar: '10000.00', ...ek }
+  return { id, sozlesmeId: '1', sozlesmeNo: 'S-1', kisaAd: 'Meram depo', vade: t(vade), tutar: '10000.00', odemeSurecinde: false, ...ek }
 }
 
 /** Birçok kuralın aynı anda ürettiği, 2026-10-15 itibarıyla görünür adaylar içeren senaryo. */
@@ -40,7 +42,7 @@ function zengin(bugun: string): HatirlatmaVerisi {
       ilkKiraBaslangici: t('2021-11-01'), baslangic: t('2021-11-01'), sonKiraDonemiBaslangici: t('2025-11-01'),
       bitis: t('2026-12-31'), artisKurali: 'TUFE12', eksikler: ['IBAN_YOK'],
     })],
-    planliTaksitler: [
+    taksitler: [
       taksit('1', '2026-10-13'), // gecikmiş: KRITIK, H2 yok
       taksit('2', '2026-10-17'), // 2 gün kala: YUKSEK, H2 görünür
       taksit('3', '2026-11-30'), // gelecek: hiçbiri görünmez
@@ -81,14 +83,14 @@ describe('genel', () => {
 
 describe('H1 / H2 ödeme', () => {
   it('vadeye 5 gün: NORMAL; 2 gün: YUKSEK; geçmiş: KRITIK ve H2 yok', () => {
-    const h = bul(veri({ planliTaksitler: [taksit('1', '2026-10-20'), taksit('2', '2026-10-17'), taksit('3', '2026-10-13')] }), 'H1')
+    const h = bul(veri({ taksitler: [taksit('1', '2026-10-20'), taksit('2', '2026-10-17'), taksit('3', '2026-10-13')] }), 'H1')
     expect(h.map((x) => [x.iliskiliId, x.oncelik])).toEqual([['1', 'NORMAL'], ['2', 'YUKSEK'], ['3', 'KRITIK']])
     expect(h[2]!.baslik).toContain('Gecikmiş')
     expect(h[0]!.aciklama).toContain('10.000,00 ₺')
-    expect(bul(veri({ planliTaksitler: [taksit('3', '2026-10-13')] }), 'H2')).toHaveLength(0)
+    expect(bul(veri({ taksitler: [taksit('3', '2026-10-13')] }), 'H2')).toHaveLength(0)
   })
   it('H2 hedefi vadeden 10 iş günü önce (tatil ve hafta sonu atlanır)', () => {
-    const h = bul(veri({ planliTaksitler: [taksit('7', '2026-10-30', { tutar: '1.00' })] }), 'H2')
+    const h = bul(veri({ taksitler: [taksit('7', '2026-10-30', { tutar: '1.00' })] }), 'H2')
     expect(h).toHaveLength(1)
     expect(h[0]!.hedefTarih).toBe('2026-10-15')
     expect(h[0]!.anahtar).toBe('H2:taksit:7:2026-10-15')
@@ -96,7 +98,7 @@ describe('H1 / H2 ödeme', () => {
   it('sözleşme aktif listede olmasa da taksit için H1 ve H2 üretilir', () => {
     const v = veri({
       sozlesmeler: [],
-      planliTaksitler: [
+      taksitler: [
         taksit('4', '2026-10-20', { sozlesmeId: '99', sozlesmeNo: 'S-99', kisaAd: 'Eski depo' }),
         taksit('5', '2026-10-13', { sozlesmeId: '99', sozlesmeNo: 'S-99' }),
       ],
@@ -109,7 +111,7 @@ describe('H1 / H2 ödeme', () => {
 
 describe('öncelik sınırları (dahil)', () => {
   it('H1: vadeye 3 ve 0 gün kala YUKSEK; 1 gün geçmiş KRITIK; 4 gün kala NORMAL', () => {
-    const oncelik = (vade: string) => bul(veri({ planliTaksitler: [taksit('1', vade)] }), 'H1')[0]!.oncelik
+    const oncelik = (vade: string) => bul(veri({ taksitler: [taksit('1', vade)] }), 'H1')[0]!.oncelik
     expect(oncelik('2026-10-18')).toBe('YUKSEK')
     expect(oncelik('2026-10-15')).toBe('YUKSEK')
     expect(oncelik('2026-10-14')).toBe('KRITIK')
@@ -352,10 +354,10 @@ describe('I7: aktifleştirilmemiş taslak', () => {
 describe('OTOMATIK_KURALLAR', () => {
   const TUM_KURALLAR: Record<HatirlatmaKurali, true> = {
     H1: true, H2: true, H4: true, H4_EKSIK: true, H5: true, H6: true, H6_SON_GUN: true, H6_ARSA: true,
-    H7: true, H8: true, H11: true, H12: true, H13: true,
+    H7: true, H8: true, H11: true, H12: true, H13: true, H3: true, H9: true, H10: true,
   }
-  it('H13 hariç tüm kuralları kapsar', () => {
-    const beklenen = (Object.keys(TUM_KURALLAR) as HatirlatmaKurali[]).filter((k) => k !== 'H13')
+  it('H13 ve H9 hariç tüm kuralları kapsar (kullanıcı tamamlayana kadar açık kalırlar)', () => {
+    const beklenen = (Object.keys(TUM_KURALLAR) as HatirlatmaKurali[]).filter((k) => k !== 'H13' && k !== 'H9')
     expect([...OTOMATIK_KURALLAR].sort()).toEqual([...beklenen].sort())
   })
   it('H13 otomatik kapatılmaz', () => {
@@ -387,8 +389,8 @@ describe('mutasyon kapısı: metinler, karar bayrakları ve tarih sınırları',
   })
 
   it('karar gerektirmeyen kurallar kararGerekli=false, gerektirenler true taşır', () => {
-    expect(bir(veri({ planliTaksitler: [taksit('1', '2026-10-20')] }), 'H1').kararGerekli).toBe(false)
-    expect(bir(veri({ planliTaksitler: [taksit('1', '2026-10-30')] }), 'H2').kararGerekli).toBe(false)
+    expect(bir(veri({ taksitler: [taksit('1', '2026-10-20')] }), 'H1').kararGerekli).toBe(false)
+    expect(bir(veri({ taksitler: [taksit('1', '2026-10-30')] }), 'H2').kararGerekli).toBe(false)
     expect(bir(veri({ sozlesmeler: [sozlesme({ tasinmazTuru: 'KONUT', ilkKiraBaslangici: t('2021-12-01') })] }), 'H7').kararGerekli).toBe(false)
     expect(bir(veri({ sozlesmeler: [sozlesme({ uzamaSayisi: 10, bitis: t('2027-02-28') })], bugun: t('2026-11-01') }), 'H8').kararGerekli).toBe(false)
     expect(bir(veri({ bugun: t('2026-09-10'), sonOnayliTufe12Ayi: { yil: 2026, ay: 8 } }), 'H11').kararGerekli).toBe(false)
@@ -401,7 +403,7 @@ describe('mutasyon kapısı: metinler, karar bayrakları ve tarih sınırları',
   })
 
   it('H1 gecikmiş açıklaması gecikme gününü pozitif yazar', () => {
-    const h = bir(veri({ planliTaksitler: [taksit('1', '2026-10-13')] }), 'H1')
+    const h = bir(veri({ taksitler: [taksit('1', '2026-10-13')] }), 'H1')
     expect(h.aciklama).toBe('Meram depo: 10.000,00 ₺, vade 13.10.2026 (2 gün gecikti).')
   })
 
@@ -482,3 +484,63 @@ describe('mutasyon kapısı: metinler, karar bayrakları ve tarih sınırları',
     expect(bul(veri({ bugun: t('2026-10-01'), sonOnayliTufe12Ayi: { yil: 2026, ay: 9 } }), 'H11')).toHaveLength(0)
   })
 })
+
+describe('F2 kuralları', () => {
+  it('H1 ödeme sürecindeki taksitte sürer ve "Ödeme sürecinde" der; H2 üretilmez', () => {
+    const v = veri({ taksitler: [taksit('2', '2026-10-17', { odemeSurecinde: true }), taksit('4', '2026-10-13', { odemeSurecinde: true })] })
+    const h1 = bul(v, 'H1')
+    expect(h1.map((h) => [h.anahtar, h.aciklama.endsWith(' Ödeme sürecinde (paket kesinleşti).')])).toEqual([['H1:taksit:2:2026-10-17', true], ['H1:taksit:4:2026-10-13', true]])
+    expect(h1[1]!.aciklama).toContain('(2 gün gecikti). Ödeme sürecinde')
+    expect(bul(v, 'H2')).toEqual([])
+    expect(bul(veri({ taksitler: [taksit('2', '2026-10-17')] }), 'H1')[0]!.aciklama).not.toContain('Ödeme sürecinde')
+  })
+
+  it('H3: eksik sorgu → SORGU_YOK anahtarı; bitiş 2026-02-09 → 2026-02-06 da görünür, 2026-02-05 te görünmez', () => {
+    const eksik = veri({ bugun: t('2026-01-25'), paketler22a: [{ paketId: '7', paketAdi: 'Şubat', eksikSorguSayisi: 2, enYakinBitis: null }] })
+    expect(bul(eksik, 'H3').map((h) => [h.anahtar, h.baslik, h.hedefTarih, h.gorunurTarih, h.oncelik, h.iliskiliTur, h.iliskiliId, h.sozlesmeId])).toEqual([
+      ['H3:paket:7:SORGU_YOK', '22/A borç sorgusu gerekli — Şubat', '2026-01-25', '2026-01-25', 'YUKSEK', 'paket', '7', null],
+    ])
+    expect(bul(eksik, 'H3')[0]!.aciklama).toBe('2 alıcı için bugün geçerli 22/A borç sorgusu yok (6183 md. 22/A). Sorguyu kişi sayfasından girin. Borç çıkmazsa ödeme emri yeni sorguyla girilebilir; borç çıkarsa paketi (kesinleşmişse iptal edip) yeniden hesaplayın.')
+    const bitis = (bugun: string) => bul(veri({ bugun: t(bugun), paketler22a: [{ paketId: '7', paketAdi: 'Şubat', eksikSorguSayisi: 0, enYakinBitis: t('2026-02-09') }] }), 'H3')
+    expect(bitis('2026-02-06').map((h) => [h.anahtar, h.hedefTarih, h.gorunurTarih, h.oncelik])).toEqual([['H3:paket:7:2026-02-09', '2026-02-09', '2026-02-06', 'YUKSEK']])
+    expect(bitis('2026-02-06')[0]!.aciklama).toBe('22/A borç sorgusunun geçerliliği 09.02.2026 tarihinde bitiyor; ödeme o güne kadar yapılmayacaksa sorguyu yenileyin.')
+    expect(bitis('2026-02-05')).toEqual([])
+    expect([...bul(eksik, 'H3'), ...bitis('2026-02-06')].map((h) => h.kararGerekli)).toEqual([false, false])
+    expect(bitis('2026-02-09')).toHaveLength(1)
+    expect(bitis('2026-02-10')).toEqual([])
+  })
+
+  it('H9: bugün 2026-10-20, Eylül stopajı var → hedef 2026-10-26; 2026-10-19 da görünmez', () => {
+    const v = (bugun: string, stopajVar = true, damgaVar = false) =>
+      veri({ bugun: t(bugun), muhtasar: { donem: { yil: 2026, ay: 9 }, stopajVar, damgaVar } })
+    expect(bul(v('2026-10-20'), 'H9').map((h) => [h.anahtar, h.baslik, h.hedefTarih, h.gorunurTarih, h.oncelik, h.iliskiliTur, h.iliskiliId, h.kararGerekli])).toEqual([
+      ['H9:sistem:muhtasar:2026-09', 'Muhtasar beyanı — Eylül 2026 ödemeleri', '2026-10-26', '2026-10-20', 'YUKSEK', 'sistem', 'muhtasar', false],
+    ])
+    expect(bul(v('2026-10-20'), 'H9')[0]!.aciklama).toBe('Gelir vergisi stopajı muhtasar ve prim hizmet beyannamesiyle bildirilmeli. Listeyi Raporlar ekranından alın.')
+    expect(bul(v('2026-10-20', true, true), 'H9')[0]!.aciklama).toMatch(/^Gelir vergisi stopajı ve İstihkaktan kesilen damga vergisi muhtasar/)
+    expect(bul(v('2026-10-20', false, true), 'H9')[0]!.aciklama).toMatch(/^İstihkaktan kesilen damga vergisi muhtasar/)
+    expect(bul(v('2026-10-19'), 'H9')).toEqual([])
+  })
+
+  it('H9: 26 sı cumartesi (2026-09) → hedef 2026-09-28; stopaj ve damga yoksa üretilmez', () => {
+    const v = (stopajVar: boolean, damgaVar: boolean) => veri({ bugun: t('2026-09-25'), muhtasar: { donem: { yil: 2026, ay: 8 }, stopajVar, damgaVar } })
+    expect(bul(v(true, false), 'H9').map((h) => [h.hedefTarih, h.gorunurTarih])).toEqual([['2026-09-28', '2026-09-20']])
+    expect(bul(v(false, false), 'H9')).toEqual([])
+    expect(bul(veri({ bugun: t('2026-09-25') }), 'H9')).toEqual([])
+  })
+
+  it('H10: olay 2026-10-01 → hedef 2026-10-16; 2026-10-17 de KRITIK', () => {
+    const d = { damgaKaydiId: '3', sozlesmeId: '1', sozlesmeNo: 'S-1', kisaAd: 'Meram depo', olayTarihi: t('2026-10-01') }
+    const v = (bugun: string) => bul(veri({ bugun: t(bugun), damgaBeyanlari: [d] }), 'H10')
+    expect(v('2026-10-16').map((h) => [h.anahtar, h.baslik, h.hedefTarih, h.gorunurTarih, h.oncelik, h.iliskiliTur, h.iliskiliId, h.sozlesmeId])).toEqual([
+      ['H10:damga:3:2026-10-16', 'Damga vergisi makbuzu bekleniyor — S-1', '2026-10-16', '2026-10-01', 'YUKSEK', 'damga', '3', '1'],
+    ])
+    expect(v('2026-10-16')[0]!.aciklama).toBe('Meram depo: malik damga vergisini 16.10.2026 tarihine kadar beyan edip ödemeli (DVK 22); makbuzu sözleşmenin Damga sekmesine yükleyin.')
+    expect(v('2026-10-17')[0]!.oncelik).toBe('KRITIK')
+    expect(v('2026-10-16')[0]!.kararGerekli).toBe(false)
+    expect(v('2026-09-30')).toEqual([])
+    // Hedef hafta sonuna denk gelirse sonraki iş günü: olay 2026-10-02 + 15 = 2026-10-17 (cumartesi) → 2026-10-19.
+    expect(bul(veri({ bugun: t('2026-10-05'), damgaBeyanlari: [{ ...d, olayTarihi: t('2026-10-02') }] }), 'H10')[0]!.hedefTarih).toBe('2026-10-19')
+  })
+})
+

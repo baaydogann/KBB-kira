@@ -17,11 +17,15 @@ const TOKEN_BICIMI = /^[A-Za-z0-9_-]{20,}$/
 /**
  * Açıklaması akışa girebilen kurallar: hatırlatma motorunun (çekirdek `hatirlatmalariUret`) ürettikleri; açıklamaları çekirdekte
  * yalnızca sözleşme no, taşınmaz kısa adı ve tarihten kurulur. H1 hariç: açıklamasında taksit tutarı var (spec §9: akışta tutar yok;
- * tutar panoda kalır). Diğer kuralların (UZAMA_BILGI, UZAMA_HATA, ARTIS_HESAP_HATA, H5_FAZLA_ODEME, TAKVIM_HATA...) açıklaması başka
+ * tutar panoda kalır). H3 hariç: başlığı ve bağlamı paket adını (serbest metin) taşır; başlığı da `SABIT_BASLIK` ile sabitlenir. H9
+ * (kullanıcı kapatır) motor ürünüdür ve açıklaması kişisel veri içermez. Diğer kuralların (UZAMA_BILGI, UZAMA_HATA, ARTIS_HESAP_HATA, H5_FAZLA_ODEME, TAKVIM_HATA...) açıklaması başka
  * servislerin yazdığı serbest iletidir (tutar/kişi adı içerebilir); akışa girmez (KVKK: kişi adı/TCKN/IBAN yok). Bu kümenin dışındaki
  * her kural için akışa yalnızca `baslik` ile sabit açıklama gider.
  */
-const MOTOR_KURALLARI: ReadonlySet<string> = new Set<string>([...OTOMATIK_KURALLAR.filter((k) => k !== 'H1'), 'H13'])
+export const MOTOR_KURALLARI: ReadonlySet<string> = new Set<string>([...OTOMATIK_KURALLAR.filter((k) => k !== 'H1' && k !== 'H3'), 'H13', 'H9'])
+
+/** Başlığı serbest metin taşıyan kurallar akışa sabit başlıkla girer. */
+const SABIT_BASLIK: Readonly<Record<string, string>> = { H3: '22/A borç sorgusu gerekli' }
 
 const GENEL_ACIKLAMA = 'Ayrıntı için KBB Kira Takip uygulamasında hatırlatmayı açın.'
 
@@ -92,7 +96,7 @@ export async function takvimIcerigi(token: string, bugun: Tarih = bugunIstanbul(
     etkinlikler: kayitlar.map((h) => ({
       uid: `${h.anahtar}@kbb-kira`,
       tarih: tarihMetni(h.tarih),
-      baslik: `[${h.oncelik}] ${h.baslik}`,
+      baslik: `[${h.oncelik}] ${SABIT_BASLIK[h.kural] ?? h.baslik}`,
       aciklama: MOTOR_KURALLARI.has(h.kural) ? h.aciklama : GENEL_ACIKLAMA,
     })),
   })

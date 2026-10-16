@@ -80,7 +80,7 @@ describe('hatırlatma üretimi', () => {
 
   it('taksit ufku vade görünürlük parametresiyle genişler; parametre yükselince hatırlatma sessizce kapanmaz', async () => {
     await sozlesme()
-    const aralik = async () => (await prisma.$transaction((tx) => hatirlatmaVerisiYukle(tx, BUGUN))).planliTaksitler.map((x) => x.vade)
+    const aralik = async () => (await prisma.$transaction((tx) => hatirlatmaVerisiYukle(tx, BUGUN))).taksitler.map((x) => x.vade)
     // Varsayılanda 2026-12-20 vadesi (66 gün sonra) yüklenmez.
     expect(await aralik()).not.toContain('2026-12-20')
     await prisma.parametre.updateMany({ where: { anahtar: 'HATIRLATMA_VADE_GORUNUR_GUN' }, data: { deger: '90' } })
