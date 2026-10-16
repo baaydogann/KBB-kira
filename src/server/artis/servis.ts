@@ -1,6 +1,6 @@
 import { artisHesapla, type ArtisSonucu } from '@/core/hesap/artis'
 import { HESAP_SURUMU, type TaksitGoruntusu } from '@/core/hesap/goruntu'
-import { taksitTutari } from '@/core/hesap/taksit-tutari'
+import { taksitTutari, type KiraDonemiGirdi } from '@/core/hesap/taksit-tutari'
 import { formatTL, para, type Para } from '@/core/para'
 import { artisTarihleri, artisYururlugu, type ArtisYururlugu } from '@/core/takvim'
 import { bugunIstanbul, enBuyukTarih, enKucukTarih, formatTarih, gunEkle, icindeMi, karsilastir, type Tarih } from '@/core/tarih'
@@ -58,6 +58,19 @@ async function artisinSozlesmesiniKilitle(tx: Tx, artisId: number): Promise<numb
   return satir.id
 }
 
+/**
+ * I3: yenilemenin son (tek) kira dönemi sözleşme başlangıcındaki, artışla henüz ayarlanmamış ILK dönem mi? Öyleyse başlangıç bir artış
+ * tarihiyse (kira yılı sınırında başlayan yenileme) o artış da hesaplanır, hatırlatılır ve onaylanınca yeni dönem açılmaz, ILK dönemin
+ * bedeli değişir (`donemBedeliniDegistir`).
+ */
+export function ilkDonemArtisBekliyorMu(
+  s: { oncekiSozlesmeId: number | null; baslangic: Date },
+  sonKd: { kaynak: string; baslangic: Date; artisHesabiId: number | null } | undefined,
+): boolean {
+  return s.oncekiSozlesmeId !== null && sonKd !== undefined && sonKd.kaynak === 'ILK' && sonKd.artisHesabiId === null
+    && tarihDb(sonKd.baslangic) === tarihDb(s.baslangic)
+}
+
 interface HesapOrtami { bugun: Tarih; ufuk: Tarih; oranlar: Awaited<ReturnType<typeof onayliOranlariYukle>>; baglam: IslemBaglami }
 
 type BekleyenSonuc = Extract<ArtisSonucu, { durum: 'BEKLEMEDE' }>
@@ -89,33 +102,34 @@ async function sozlesmeArtisiniHesapla(tx: Tx, sozlesmeId: number, o: HesapOrtam
   if (!sonKd) return null
   // Sona ermekte olan sözleşmede etkin bitiş (fesih tarihi) sınırdır: ondan sonra başlayan artış hesaplanmaz.
   const son = yururluk.bitisEtkin === null ? o.ufuk : enKucukTarih(yururluk.bitisEtkin, o.ufuk)
+  // Son kira dönemiyle başlayan artış o dönemle uygulanmıştır; yalnızca ayarlanmamış yenileme ILK dönemi kendi başlangıcındaki artışı bekler.
+  const ilkDonemArtisi = ilkDonemArtisBekliyorMu(s, s.kiraDonemleri.at(-1))
   const d = artisTarihleri({ ilkKiraBaslangici: tarihDb(s.ilkKiraBaslangici), periyotAy: s.artisPeriyoduAy, sonTarih: son })
-    .find((x) => karsilastir(x, sonKd.baslangic) > 0)
+    .find((x) => karsilastir(x, sonKd.baslangic) > (ilkDonemArtisi ? -1 : 0))
   if (d === undefined) return null
   izleyici.donem = d
   const mevcut = s.artislar.find((a) => tarihDb(a.donemBaslangic) === d)
   if (mevcut && mevcut.durum !== 'BEKLEMEDE') return null
-  const onceki = kd.find((k) => icindeMi(gunEkle(d, -1), { baslangic: k.baslangic, bitis: k.bitis }))
-  if (!onceki) throw new IsKuraliHatasi('DONEM', `${s.sozlesmeNo}: ${d} öncesindeki kira dönemi bulunamadı.`)
+  const oncekiBedel = d === sonKd.baslangic ? await oncekiSozlesmeninSonBedeli(tx, s.oncekiSozlesmeId, sonKd.bedel) : oncekiDonemBedeli(kd, d, s.sozlesmeNo)
   const konut = await parametreOpsiyonel('TBK344_KONUT_SINIR', d, tx)
   const r = artisHesapla({
-    donemBaslangic: d, ilkKiraBaslangici: tarihDb(s.ilkKiraBaslangici), oncekiBedel: onceki.bedel,
+    donemBaslangic: d, ilkKiraBaslangici: tarihDb(s.ilkKiraBaslangici), oncekiBedel,
     kural: s.artisKurali, degisimTuru: s.artisDegisimTuru, sabitOran: s.sabitArtisOrani === null ? null : paraDb(s.sabitArtisOrani),
     elleOran: mevcut?.elleOran ? paraDb(mevcut.elleOran) : null, tasinmazTuru: s.tasinmaz.tur,
     konutSiniri: konut === null ? null : para(konut), oranlar: o.oranlar,
   })
   if (!r.ok) throw new IsKuraliHatasi(r.hata.kod, `${s.sozlesmeNo}: ${r.hata.mesaj}`)
   const sonuc = r.deger
-  if (mevcut && sonuc.durum === 'BEKLEMEDE' && bekleyenDegismedi(mevcut, sonuc, onceki.bedel)) return 'BEKLEMEDE'
+  if (mevcut && sonuc.durum === 'BEKLEMEDE' && bekleyenDegismedi(mevcut, sonuc, oncekiBedel)) return 'BEKLEMEDE'
   const veri = sonuc.durum === 'HESAPLANDI'
     ? {
         referansYil: sonuc.referansAy.yil, referansAy: sonuc.referansAy.ay, tavan: sonuc.tavan === null ? null : oranYaz(sonuc.tavan),
-        sozlesmeOrani: oranYaz(sonuc.sozlesmeOrani), uygulananOran: oranYaz(sonuc.uygulananOran), eskiBedel: paraYaz(onceki.bedel),
+        sozlesmeOrani: oranYaz(sonuc.sozlesmeOrani), uygulananOran: oranYaz(sonuc.uygulananOran), eskiBedel: paraYaz(oncekiBedel),
         yeniBedel: paraYaz(sonuc.yeniBedel), gerekce: jsonYaz({ satirlar: sonuc.satirlar }), durum: 'HESAPLANDI' as const,
       }
     : {
         referansYil: sonuc.referansAy.yil, referansAy: sonuc.referansAy.ay, tavan: null, sozlesmeOrani: null, uygulananOran: null,
-        eskiBedel: paraYaz(onceki.bedel), yeniBedel: null,
+        eskiBedel: paraYaz(oncekiBedel), yeniBedel: null,
         gerekce: jsonYaz({ neden: sonuc.neden, eksikSeriler: sonuc.eksikSeriler, satirlar: sonuc.satirlar }), durum: 'BEKLEMEDE' as const,
       }
   let artisId: number
@@ -132,10 +146,27 @@ async function sozlesmeArtisiniHesapla(tx: Tx, sozlesmeId: number, o: HesapOrtam
   await denetimKaydi(tx, o.baglam, {
     varlik: 'sozlesme', varlikId: s.id, eylem: 'ARTIS_HESAPLA',
     sonra: sonuc.durum === 'HESAPLANDI'
-      ? { artisHesabiId: artisId, donem: d, durum: sonuc.durum, uygulananOran: sonuc.uygulananOran.toString(), eskiBedel: paraYaz(onceki.bedel), yeniBedel: paraYaz(sonuc.yeniBedel) }
+      ? { artisHesabiId: artisId, donem: d, durum: sonuc.durum, uygulananOran: sonuc.uygulananOran.toString(), eskiBedel: paraYaz(oncekiBedel), yeniBedel: paraYaz(sonuc.yeniBedel) }
       : { artisHesabiId: artisId, donem: d, durum: sonuc.durum, neden: sonuc.neden, eksikSeriler: sonuc.eksikSeriler },
   })
   return sonuc.durum
+}
+
+/** Artış tarihinden önceki gün geçerli kira döneminin bedeli (spec §6.3: önceki dönemde fiilen geçerli bedel). */
+function oncekiDonemBedeli(kd: readonly KiraDonemiGirdi[], d: Tarih, sozlesmeNo: string): Para {
+  const onceki = kd.find((k) => icindeMi(gunEkle(d, -1), { baslangic: k.baslangic, bitis: k.bitis }))
+  if (!onceki) throw new IsKuraliHatasi('DONEM', `${sozlesmeNo}: ${d} öncesindeki kira dönemi bulunamadı.`)
+  return onceki.bedel
+}
+
+/**
+ * I3: yenilemenin ilk günündeki artışta önceki bedel, önceki sözleşmenin son kira döneminin bedelidir (taslağın kopyaladığı değer).
+ * Önceki sözleşmenin kira dönemi yoksa (yalnızca elle kurulmuş veri) ILK dönemin bedeli kullanılır.
+ */
+async function oncekiSozlesmeninSonBedeli(tx: Tx, oncekiSozlesmeId: number | null, ilkBedel: Para): Promise<Para> {
+  if (oncekiSozlesmeId === null) return ilkBedel
+  const son = await tx.kiraDonemi.findFirst({ where: { sozlesmeId: oncekiSozlesmeId }, orderBy: { baslangic: 'desc' }, select: { bedelTutari: true } })
+  return son === null ? ilkBedel : paraDb(son.bedelTutari)
 }
 
 /**
@@ -224,8 +255,13 @@ interface FarkOzeti { fark: number; fazlaOdeme: number; iptalFark: number }
  *
  * Bir taksitin tahakkuk eden tutarı: ana tutar + tahakkuk etmiş önceki FARK'lar (aynı ölçüt). Vadesi gelmemiş PLANLANDI FARK'lar tahakkuk
  * etmemiştir: iptal edilir (korumalı yazma) ve eksik/fazla farkın tamamı tek yeni FARK ile (ya da fazla ödeme hatırlatmasıyla) karşılanır.
+ *
+ * `hatirlatmaEki`: fazla ödeme hatırlatmasının anahtar eki. Yeni dönemde dönemin kimliğidir; var olan dönemin bedeli değiştirildiğinde
+ * (`donemBedeliniDegistir`) kimliğe yeni kaynak eklenir, aynı dönemdeki önceki olayın (belki tamamlanmış) hatırlatması ezilmesin.
  */
-async function farklariIsle(tx: Tx, sozlesmeId: number, d: Tarih, kiraDonemiId: number, artisHesabiId: number | null, bugun: Tarih): Promise<FarkOzeti> {
+async function farklariIsle(
+  tx: Tx, sozlesmeId: number, d: Tarih, kiraDonemiId: number, artisHesabiId: number | null, bugun: Tarih, hatirlatmaEki = String(kiraDonemiId),
+): Promise<FarkOzeti> {
   const ozet: FarkOzeti = { fark: 0, fazlaOdeme: 0, iptalFark: 0 }
   const gun = dbTarih(bugun)
   const s = await tx.sozlesme.findUniqueOrThrow({
@@ -259,7 +295,7 @@ async function farklariIsle(tx: Tx, sozlesmeId: number, d: Tarih, kiraDonemiId: 
     if (fark.isZero()) continue
     if (fark.isNegative()) {
       await fazlaOdemeHatirlat(tx, {
-        taksitId: x.id, ek: String(kiraDonemiId), sozlesmeId, baslik: `Fazla ödeme — ${s.sozlesmeNo}`,
+        taksitId: x.id, ek: hatirlatmaEki, sozlesmeId, baslik: `Fazla ödeme — ${s.sozlesmeNo}`,
         aciklama: `${formatTarih(donem.baslangic)} – ${formatTarih(donem.bitis)} taksitinde ${formatTL(fark.abs())} fazla ödendi; mahsup veya iade takibi gerekli.`,
       }, bugun)
       ozet.fazlaOdeme += 1
@@ -314,6 +350,36 @@ async function yeniKiraDonemiAc(
   return { plan, ...farklar }
 }
 
+type KiraDonemiSatiri = { id: number; baslangic: Date; bedelTutari: { toString(): string }; kaynak: 'ILK' | 'ARTIS' | 'TESPIT' | 'ANLASMA' | 'ELLE'; artisHesabiId: number | null }
+
+/** Değiştirilen dönemin önceki hâli (denetim satırı için). */
+function donemOzeti(kd: KiraDonemiSatiri) {
+  return { kiraDonemiId: kd.id, oncekiBedel: paraDb(kd.bedelTutari).toFixed(2), oncekiKaynak: kd.kaynak, oncekiArtisHesabiId: kd.artisHesabiId }
+}
+
+/**
+ * Var olan bir kira döneminin bedelini değiştirir; yeni dönem açmaz. Yenilemenin ayarlanmamış ILK dönemine artış onayı (I3) ve onaylı
+ * artış döneminin başlangıcından işleyen tespit kararı (I8) için. Korumalı yazma: dönem okunduğu gibi değilse (bedel, kaynak ya da
+ * artış bağı değişmiş) CakismaHatasi. Ardından fark ve plan o dönemin başlangıcından yeniden işlenir; vadesi geçmiş taksitler
+ * dokunulmaz, fark FARK ya da fazla ödeme hatırlatması olur (bkz. `farklariIsle`). Çağıran sözleşme satırını kilitlemiş olmalıdır.
+ */
+async function donemBedeliniDegistir(
+  tx: Tx, sozlesmeId: number, kd: KiraDonemiSatiri,
+  yeni: { bedel: Para; kaynak: 'ARTIS' | 'TESPIT'; artisHesabiId: number | null; aciklama?: string }, bugun: Tarih,
+): Promise<DonemAcmaOzeti> {
+  const r = await tx.kiraDonemi.updateMany({
+    where: { id: kd.id, kaynak: kd.kaynak, bedelTutari: paraYaz(paraDb(kd.bedelTutari)), artisHesabiId: kd.artisHesabiId },
+    data: {
+      bedelTutari: paraYaz(yeni.bedel), kaynak: yeni.kaynak, artisHesabiId: yeni.artisHesabiId,
+      ...(yeni.aciklama === undefined ? {} : { aciklama: yeni.aciklama }),
+    },
+  })
+  if (r.count === 0) throw new CakismaHatasi()
+  const farklar = await farklariIsle(tx, sozlesmeId, tarihDb(kd.baslangic), kd.id, yeni.artisHesabiId, bugun, `${kd.id}:${yeni.kaynak}`)
+  const plan = await taksitPlaniniGuncelle(tx, sozlesmeId, bugun)
+  return { plan, ...farklar }
+}
+
 export async function artisOnayla(id: number, version: number, baglam: IslemBaglami, bugun: Tarih = bugunIstanbul()): Promise<void> {
   await prisma.$transaction(async (tx) => {
     const sozlesmeId = await artisinSozlesmesiniKilitle(tx, id)
@@ -326,12 +392,21 @@ export async function artisOnayla(id: number, version: number, baglam: IslemBagl
       data: { durum: 'ONAYLANDI', onaylayanId: baglam.kullaniciId, onayZamani: new Date(), version: { increment: 1 } },
     })
     if (r.count === 0) throw new CakismaHatasi()
-    const ozet = await yeniKiraDonemiAc(tx, sozlesmeId, tarihDb(a.donemBaslangic), paraDb(a.yeniBedel), 'ARTIS', a.id, null, baglam, bugun)
+    const d = tarihDb(a.donemBaslangic)
+    // I3: artış, yenilemenin ayarlanmamış ILK döneminin başlangıcındaysa o dönemin bedeli değişir; aksi halde yeni dönem açılır.
+    const s = await tx.sozlesme.findUniqueOrThrow({ where: { id: sozlesmeId }, select: { oncekiSozlesmeId: true, baslangic: true, durum: true, bitis: true, fesihTarihi: true } })
+    const sonKd = await tx.kiraDonemi.findFirst({ where: { sozlesmeId }, orderBy: { baslangic: 'desc' } })
+    const ilkDonem = sonKd !== null && tarihDb(sonKd.baslangic) === d && ilkDonemArtisBekliyorMu(s, sonKd) ? sonKd : null
+    if (ilkDonem !== null && artisIcinYururluk(s, bugun) === null) throw new IsKuraliHatasi('DURUM', 'Yalnızca yürürlükteki sözleşmenin bedeli değiştirilir.')
+    const ozet = ilkDonem === null
+      ? await yeniKiraDonemiAc(tx, sozlesmeId, d, paraDb(a.yeniBedel), 'ARTIS', a.id, null, baglam, bugun)
+      : await donemBedeliniDegistir(tx, sozlesmeId, ilkDonem, { bedel: paraDb(a.yeniBedel), kaynak: 'ARTIS', artisHesabiId: a.id }, bugun)
     await denetimKaydi(tx, baglam, {
       varlik: 'sozlesme', varlikId: sozlesmeId, eylem: 'ARTIS_ONAY',
       sonra: {
-        artisHesabiId: id, donem: tarihDb(a.donemBaslangic), eskiBedel: a.eskiBedel.toFixed(2), yeniBedel: a.yeniBedel.toFixed(2),
+        artisHesabiId: id, donem: d, eskiBedel: a.eskiBedel.toFixed(2), yeniBedel: a.yeniBedel.toFixed(2),
         uygulananOran: a.uygulananOran?.toString(), plan: ozet.plan, farkTaksiti: ozet.fark, iptalFarkTaksiti: ozet.iptalFark, fazlaOdemeHatirlatmasi: ozet.fazlaOdeme,
+        ...(ilkDonem === null ? {} : { degistirilenDonem: donemOzeti(ilkDonem) }),
       },
     })
   }, ISLEM)
@@ -379,7 +454,12 @@ export async function kiraBedeliDegistir(
     if (r.count === 0) throw new CakismaHatasi()
     // Son kira döneminden sonra, değişiklik tarihinden önce onay bekleyen bir artış varsa yeni dönem onu onaylanamaz bırakırdı (sıra kuralı):
     // sessizce yetim bırakmak yerine önce onaylanması ya da değişikliğin onun tarihinden başlatılması istenir.
-    const sonDonem = await tx.kiraDonemi.findFirst({ where: { sozlesmeId }, orderBy: { baslangic: 'desc' }, select: { baslangic: true } })
+    const sonDonem = await tx.kiraDonemi.findFirst({ where: { sozlesmeId }, orderBy: { baslangic: 'desc' } })
+    // I8: tespit kararı tam son artış döneminin başlangıcından işliyorsa yeni dönem açılmaz, o dönemin bedeli değişir (TBK 344/3: tespit
+    // artışın yerine geçer). Anlaşma ve düzeltme ile tespit dışındaki her aynı tarihli değişiklik eskisi gibi sıra kuralına takılır.
+    const degisecekDonem = g.kaynak === 'TESPIT' && sonDonem !== null && sonDonem.kaynak === 'ARTIS' && tarihDb(sonDonem.baslangic) === g.baslangic
+      ? sonDonem
+      : null
     const acikArtis = sonDonem === null ? null : await tx.artisHesabi.findFirst({
       where: { sozlesmeId, durum: { in: ACIK_ARTIS_DURUMLARI }, donemBaslangic: { gt: sonDonem.baslangic, lt: dbTarih(g.baslangic) } },
       orderBy: { donemBaslangic: 'asc' }, select: { donemBaslangic: true },
@@ -401,13 +481,16 @@ export async function kiraBedeliDegistir(
       })
       if (iptal.count !== iptalArtisIdleri.length) throw new CakismaHatasi()
     }
-    const ozet = await yeniKiraDonemiAc(tx, sozlesmeId, g.baslangic, g.bedel, g.kaynak, null, aciklama, baglam, bugun)
+    const ozet = degisecekDonem === null
+      ? await yeniKiraDonemiAc(tx, sozlesmeId, g.baslangic, g.bedel, g.kaynak, null, aciklama, baglam, bugun)
+      : await donemBedeliniDegistir(tx, sozlesmeId, degisecekDonem, { bedel: g.bedel, kaynak: 'TESPIT', artisHesabiId: null, aciklama }, bugun)
     // Dayanak serbest metindir (kişisel veri içerebilir): denetim satırına metni değil, yazıldığı bilgisi girer; metin kira dönemi satırında durur.
     await denetimKaydi(tx, baglam, {
       varlik: 'sozlesme', varlikId: sozlesmeId, eylem: 'KIRA_BEDELI_DEGISTI',
       sonra: {
         baslangic: g.baslangic, bedel: g.bedel.toFixed(2), kaynak: g.kaynak, aciklamaYazildi: true, iptalArtisIdleri,
         plan: ozet.plan, farkTaksiti: ozet.fark, iptalFarkTaksiti: ozet.iptalFark, fazlaOdemeHatirlatmasi: ozet.fazlaOdeme,
+        ...(degisecekDonem === null ? {} : { degistirilenDonem: donemOzeti(degisecekDonem) }),
       },
     })
   }, ISLEM)

@@ -15,7 +15,7 @@ function sozlesme(ek: Partial<SozlesmeOzeti> = {}): SozlesmeOzeti {
     id: '1', no: 'S-1', kisaAd: 'Meram depo', tasinmazTuru: 'ISYERI',
     baslangic: t('2025-01-01'), bitis: t('2027-12-31'), ilkKiraBaslangici: t('2025-01-01'),
     sonKiraDonemiBaslangici: t('2026-01-01'), uzamaSayisi: 0, artisKurali: 'YOK', artisPeriyoduAy: 12, eksikler: [],
-    sonaErmekte: false, bitisEtkin: t('2027-12-31'),
+    sonaErmekte: false, bitisEtkin: t('2027-12-31'), ilkDonemArtisBekliyor: false,
     ...ek,
   }
 }
@@ -185,6 +185,17 @@ describe('H5 artış', () => {
     expect(bul(veri({ sozlesmeler: [{ ...s, sonKiraDonemiBaslangici: t('2026-11-01') }] }), 'H5')).toHaveLength(0)
     const gecmis = sozlesme({ ilkKiraBaslangici: t('2025-10-01'), baslangic: t('2025-10-01'), sonKiraDonemiBaslangici: t('2025-10-01'), artisKurali: 'TUFE12' })
     expect(bul(veri({ sozlesmeler: [gecmis] }), 'H5')[0]!.oncelik).toBe('KRITIK')
+  })
+  it('I3: yenilemenin ayarlanmamış ILK dönemi artış tarihinde başlıyorsa o tarih de hatırlatılır; bayrak yoksa atlanır', () => {
+    const yenileme = sozlesme({
+      ilkKiraBaslangici: t('2025-11-01'), baslangic: t('2026-11-01'), sonKiraDonemiBaslangici: t('2026-11-01'), artisKurali: 'TUFE12', bitis: t('2027-10-31'),
+    })
+    expect(bul(veri({ sozlesmeler: [yenileme] }), 'H5')).toHaveLength(0)
+    expect(bul(veri({ sozlesmeler: [{ ...yenileme, ilkDonemArtisBekliyor: true }] }), 'H5').map((x) => [x.anahtar, x.baslik]))
+      .toEqual([['H5:sozlesme:1:2026-11-01', 'Kira artışı yaklaşıyor — S-1']])
+    // Bayrak yalnızca eşitliği açar: son dönemden önceki tarihler yine atlanır.
+    const eski = { ...yenileme, ilkKiraBaslangici: t('2024-11-01'), ilkDonemArtisBekliyor: true }
+    expect(bul(veri({ sozlesmeler: [eski] }), 'H5').map((x) => x.anahtar)).toEqual(['H5:sozlesme:1:2026-11-01'])
   })
   it('TBK 347 sözleşmesinde bitişten sonra başlayan artış ufka kadar aranır', () => {
     expect(bul(veri({ sozlesmeler: [artisli({})] }), 'H5').map((x) => x.anahtar)).toEqual(['H5:sozlesme:1:2026-11-01'])

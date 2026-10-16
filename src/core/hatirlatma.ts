@@ -73,6 +73,11 @@ export interface SozlesmeOzeti {
   sonaErmekte: boolean
   /** Fesih tarihi, yoksa sözleşme bitişi (belirsiz sürelide null). */
   bitisEtkin: Tarih | null
+  /**
+   * Yenilemenin tek kira dönemi başlangıçtaki, henüz artışla ayarlanmamış ILK dönemdir: o başlangıç bir artış tarihiyse
+   * (kira yılı sınırında başlayan yenileme) artışı bekleniyor; onaylanınca ILK dönemin bedeli değişir.
+   */
+  ilkDonemArtisBekliyor: boolean
 }
 export interface TaksitOzeti {
   id: string
@@ -189,7 +194,9 @@ function sozlesmeKurallari(v: HatirlatmaVerisi, s: SozlesmeOzeti, ekle: Ekle): v
     // etkin bitişe kadar (uzamayacaktır).
     const son = s.sonaErmekte ? enKucukTarih(s.bitisEtkin ?? ufuk, ufuk) : s.bitis === null || tbk ? ufuk : enKucukTarih(s.bitis, ufuk)
     for (const d of artisTarihleri({ ilkKiraBaslangici: s.ilkKiraBaslangici, periyotAy: s.artisPeriyoduAy, sonTarih: son })) {
-      if (karsilastir(d, s.sonKiraDonemiBaslangici) <= 0) continue
+      // Son kira dönemiyle başlayan artış o dönemle uygulanmıştır; yalnızca ayarlanmamış yenileme ILK dönemi bekler.
+      const sira = karsilastir(d, s.sonKiraDonemiBaslangici)
+      if (sira < 0 || (sira === 0 && !s.ilkDonemArtisBekliyor)) continue
       const kayit = v.artislar.find((x) => x.sozlesmeId === s.id && x.donemBaslangic === d)
       if (kayit?.durum === 'ONAYLANDI') continue
       const durumMetni = kayit === undefined ? 'yaklaşıyor' : kayit.durum === 'BEKLEMEDE' ? 'endeks bekleniyor' : 'onayınızı bekliyor'

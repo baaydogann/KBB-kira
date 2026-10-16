@@ -7,7 +7,7 @@ import type { IslemBaglami } from '../baglam'
 import { prisma, type Tx } from '../db'
 import { denetimKaydi } from '../denetim'
 import { dbTarih, tarihDb, tarihDbOpt } from '../donustur'
-import { artisIcinYururluk, artisYururlukSorgusu } from '../artis/servis'
+import { artisIcinYururluk, artisYururlukSorgusu, ilkDonemArtisBekliyorMu } from '../artis/servis'
 import { onayliOranlariYukle } from '../endeks/oranlar'
 import { BulunamadiHatasi, CakismaHatasi, IsKuraliHatasi } from '../hata'
 import { hatirlatmaAyarlari, parametreBitisleri, statuKurallari } from '../parametre/servis'
@@ -70,7 +70,7 @@ export async function hatirlatmaVerisiYukle(tx: Tx, bugun: Tarih): Promise<Hatir
         baslangic, bitis: tarihDbOpt(s.bitis), ilkKiraBaslangici: tarihDb(s.ilkKiraBaslangici),
         sonKiraDonemiBaslangici: s.kiraDonemleri[0] ? tarihDb(s.kiraDonemleri[0].baslangic) : baslangic,
         uzamaSayisi: s.uzamaSayisi, artisKurali: s.artisKurali, artisPeriyoduAy: s.artisPeriyoduAy, eksikler,
-        sonaErmekte: yururluk.sonaErmekte, bitisEtkin: yururluk.bitisEtkin,
+        sonaErmekte: yururluk.sonaErmekte, bitisEtkin: yururluk.bitisEtkin, ilkDonemArtisBekliyor: ilkDonemArtisBekliyorMu(s, s.kiraDonemleri[0]),
       }]
     }),
     planliTaksitler: taksitler.map((x) => ({

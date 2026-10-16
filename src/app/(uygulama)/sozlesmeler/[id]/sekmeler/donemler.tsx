@@ -1,6 +1,6 @@
 import type { HesapSatiri } from '@/core/hesap/goruntu'
 import { ayAdi, bugunIstanbul } from '@/core/tarih'
-import { artisIcinYururluk } from '@/server/artis/servis'
+import { artisIcinYururluk, ilkDonemArtisBekliyorMu } from '@/server/artis/servis'
 import { tarihDbOpt } from '@/server/donustur'
 import type { SozlesmeDetayi } from '@/server/sozlesme/sorgu'
 import { Kart } from '@/components/ui/kart'
@@ -24,8 +24,11 @@ export function DonemlerSekmesi({ s, ufukGun }: { s: SozlesmeDetayi; ufukGun: nu
   const yururlukte = s.durum === 'AKTIF' || s.durum === 'UZADI'
   // Artış hesabı, elle oran ve onay ileri tarihli fesih/sona ermede de etkin bitişe kadar yapılır (bedel değişikliği yapılmaz).
   const artisYururlukte = artisIcinYururluk(s, bugunIstanbul()) !== null
-  // Yeni kira dönemi açılınca, o tarihte ya da öncesinde başlayan onaysız artışlar bir daha onaylanamaz (sıra kuralı).
-  const sonKiraBaslangici = s.kiraDonemleri.at(-1)?.baslangic.getTime() ?? 0
+  // Yeni kira dönemi açılınca, o tarihte ya da öncesinde başlayan onaysız artışlar bir daha onaylanamaz (sıra kuralı). İstisna: yenilemenin
+  // ayarlanmamış ILK dönemi kendi başlangıcındaki artışla onaylanır (dönemin bedeli değişir).
+  const sonKd = s.kiraDonemleri.at(-1)
+  const sonKiraBaslangici = sonKd?.baslangic.getTime() ?? 0
+  const ilkDonemArtisi = ilkDonemArtisBekliyorMu(s, sonKd)
   const bedelAlanlari: EylemAlani[] = [
     { ad: 'baslangic', etiket: 'Başlangıç', tur: 'date', zorunlu: true },
     { ad: 'bedel', etiket: 'Yeni bedel', ondalik: true, zorunlu: true, ipucu: s.bedelTabani === 'AYLIK' ? 'Aylık bedel' : 'Yıllık bedel' },
@@ -61,7 +64,7 @@ export function DonemlerSekmesi({ s, ufukGun }: { s: SozlesmeDetayi; ufukGun: nu
               {s.artislar.map((a) => {
                 const gerekce = (a.gerekce ?? {}) as { satirlar?: HesapSatiri[]; neden?: string; eksikSeriler?: string[] }
                 const acik = (a.durum === 'BEKLEMEDE' || a.durum === 'HESAPLANDI') && artisYururlukte
-                const gecersiz = acik && a.donemBaslangic.getTime() <= sonKiraBaslangici
+                const gecersiz = acik && a.donemBaslangic.getTime() <= sonKiraBaslangici && !(ilkDonemArtisi && a.donemBaslangic.getTime() === sonKiraBaslangici)
                 return (
                   <tr key={a.id}>
                     <Td><TarihMetni deger={tarihDbOpt(a.donemBaslangic)} /></Td>

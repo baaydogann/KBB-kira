@@ -94,6 +94,20 @@ describe('veritabanı kısıtları', () => {
     await prisma.taksit.update({ where: { id: ilk.id }, data: { durum: 'IPTAL' } })
     await expect(prisma.taksit.create({ data: { ...fark, kiraDonemiId: kd1.id } })).resolves.toBeTruthy()
   })
+
+  it('I8: aynı kira döneminin artış farkı ve (bedeli değiştiren) tespit farkı birlikte aktif olabilir; aynı artış hesabıyla ikincisi olamaz', async () => {
+    const s = await ornekSozlesme()
+    const ana = await prisma.taksit.create({
+      data: { sozlesmeId: s.id, tur: 'NORMAL', donemBaslangic: new Date('2026-01-01'), donemBitis: new Date('2026-01-31'), vadeTarihi: new Date('2026-01-01'), tutar: '1', hesapGoruntusu: {} },
+    })
+    const a = await prisma.artisHesabi.create({ data: { sozlesmeId: s.id, donemBaslangic: new Date('2026-01-01'), referansYil: 2025, referansAy: 12, eskiBedel: '1', gerekce: {}, durum: 'ONAYLANDI' } })
+    const kd = await prisma.kiraDonemi.create({ data: { sozlesmeId: s.id, baslangic: new Date('2026-01-01'), bitis: null, bedelTutari: '2', bedelTabani: 'AYLIK', kaynak: 'ARTIS', artisHesabiId: a.id } })
+    const fark = { sozlesmeId: s.id, tur: 'FARK' as const, anaTaksitId: ana.id, kiraDonemiId: kd.id, donemBaslangic: new Date('2026-01-01'), donemBitis: new Date('2026-01-31'), vadeTarihi: new Date('2026-01-01'), tutar: '1', hesapGoruntusu: {} }
+    await prisma.taksit.create({ data: { ...fark, artisHesabiId: a.id, durum: 'ODENDI' } })
+    await expect(prisma.taksit.create({ data: { ...fark, artisHesabiId: null } })).resolves.toBeTruthy()
+    expect(benzersizIhlaliMi(await prisma.taksit.create({ data: { ...fark, artisHesabiId: a.id } }).catch((e: unknown) => e))).toBe(true)
+    expect(benzersizIhlaliMi(await prisma.taksit.create({ data: { ...fark, artisHesabiId: null } }).catch((e: unknown) => e))).toBe(true)
+  })
 })
 
 describe('hisse toplamı: bitmiş hisseler ve doğrudan AKTIF ekleme', () => {

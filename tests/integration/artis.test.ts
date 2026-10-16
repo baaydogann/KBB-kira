@@ -15,7 +15,7 @@ import { artisElleOranGir, artisOnayla, artislariHesapla, kiraBedeliDegistir } f
 import { endeksElleGir } from '@/server/endeks/servis'
 import { hatirlatmalariUret } from '@/core/hatirlatma'
 import { hatirlatmaVerisiYukle } from '@/server/hatirlatma/servis'
-import { sozlesmeFeshet } from '@/server/sozlesme/yasam-dongusu'
+import { sozlesmeFeshet, sozlesmeYenile } from '@/server/sozlesme/yasam-dongusu'
 import { sozlesmeAktiflestir, sozlesmeTaslakKaydet } from '@/server/sozlesme/servis'
 import { taksitPlaniniGuncelle } from '@/server/taksit/servis'
 import { CakismaHatasi, IsKuraliHatasi } from '@/server/hata'
@@ -209,6 +209,100 @@ describe('I2: ileri tarihli fesih ve sona erme bitişe kadar yürürlüktedir', 
     expect([b.durum, b.yeniBedel?.toFixed(2)]).toEqual(['HESAPLANDI', '12000.00'])
     await artisOnayla(b.id, b.version, TEST_BAGLAMI, BUGUN)
     expect(await prisma.kiraDonemi.count({ where: { sozlesmeId: id } })).toBe(2)
+  })
+})
+
+describe('I3 + I8: var olan kira döneminin bedeli değişir', () => {
+  const surum = async (id: number) => (await prisma.sozlesme.findUniqueOrThrow({ where: { id } })).version
+  const donemler = (id: number) => prisma.kiraDonemi.findMany({ where: { sozlesmeId: id }, orderBy: { baslangic: 'asc' } })
+  const h5 = async (id: number, bugun: Tarih) =>
+    hatirlatmalariUret(await prisma.$transaction((tx) => hatirlatmaVerisiYukle(tx, bugun))).filter((x) => x.kural === 'H5' && x.sozlesmeId === String(id))
+  const tespitTekrar = async (id: number) =>
+    kiraBedeliDegistir(id, await surum(id), { baslangic: t('2026-11-01'), bedel: para('15000'), kaynak: 'TESPIT', aciklama: 'Karar' }, TEST_BAGLAMI, BUGUN)
+
+  it('I3: kira yılı sınırında başlayan yenilemenin ilk günündeki artış hesaplanır, hatırlatılır, onaylanınca ILK dönemin bedeli değişir', async () => {
+    const eski = await sozlesme({ baslangic: '2025-11-01', bitis: '2026-10-31' })
+    const yeni = await sozlesmeYenile(eski, TEST_BAGLAMI)
+    await sozlesmeAktiflestir(yeni, 0, TEST_BAGLAMI, BUGUN)
+    expect((await donemler(yeni)).map((k) => [k.kaynak, iso(k.baslangic), k.bedelTutari.toFixed(2)])).toEqual([['ILK', '2026-11-01', '10000.00']])
+    expect((await h5(yeni, BUGUN)).map((x) => x.anahtar)).toEqual([`H5:sozlesme:${yeni}:2026-11-01`])
+    await tufe12Gir(10, '31.20')
+    expect(await hesapla()).toEqual({ hesaplanan: 1, bekleyen: 0 })
+    // Önceki sözleşme (bitişi 2026-10-31) bu artışı hesaplamaz; yenileme hesaplar ve önceki bedel öncekinin son bedelidir.
+    expect(await prisma.artisHesabi.count({ where: { sozlesmeId: eski } })).toBe(0)
+    const a = await prisma.artisHesabi.findFirstOrThrow({ where: { sozlesmeId: yeni } })
+    expect([iso(a.donemBaslangic), a.durum, a.eskiBedel.toFixed(2), a.yeniBedel?.toFixed(2)]).toEqual(['2026-11-01', 'HESAPLANDI', '10000.00', '13120.00'])
+    expect((await h5(yeni, BUGUN)).map((x) => x.kararGerekli)).toEqual([true])
+
+    // Kasım vadesi geçtikten sonra onay: Kasım taksiti FARK alır, Aralık yeniden fiyatlanır; yeni dönem açılmaz.
+    const onayGunu = t('2026-11-10')
+    await artisOnayla(a.id, a.version, TEST_BAGLAMI, onayGunu)
+    expect((await donemler(yeni)).map((k) => [k.kaynak, iso(k.baslangic), iso(k.bitis), k.bedelTutari.toFixed(2), k.artisHesabiId])).toEqual([
+      ['ARTIS', '2026-11-01', null, '13120.00', a.id],
+    ])
+    const kasim = await taksit(yeni, '2026-11')
+    expect(kasim.tutar.toFixed(2)).toBe('10000.00')
+    const [fark] = await prisma.taksit.findMany({ where: { sozlesmeId: yeni, tur: 'FARK' } })
+    expect([fark?.anaTaksitId, fark?.tutar.toFixed(2), fark?.artisHesabiId]).toEqual([kasim.id, '3120.00', a.id])
+    expect((await taksit(yeni, '2026-12')).tutar.toFixed(2)).toBe('13120.00')
+    expect(await h5(yeni, onayGunu)).toEqual([])
+    const kayit = await prisma.olayGunlugu.findFirstOrThrow({ where: { eylem: 'ARTIS_ONAY', varlikId: String(yeni) } })
+    expect(kayit.sonra).toMatchObject({ degistirilenDonem: { oncekiBedel: '10000.00', oncekiKaynak: 'ILK' }, farkTaksiti: 1 })
+    // Sıradaki artış ILK dönemden değil, yeni bedelden hesaplanır (bitiş sonrası artış hesaplanmadığından süre uzatılır).
+    await prisma.sozlesme.update({ where: { id: yeni }, data: { bitis: new Date('2028-10-31') } })
+    expect(await prisma.$transaction((tx) => artislariHesapla(tx, t('2027-10-01')))).toEqual({ hesaplanan: 0, bekleyen: 1 })
+    const sonraki = await prisma.artisHesabi.findFirstOrThrow({ where: { sozlesmeId: yeni, durum: 'BEKLEMEDE' } })
+    expect([iso(sonraki.donemBaslangic), sonraki.eskiBedel.toFixed(2)]).toEqual(['2027-11-01', '13120.00'])
+  })
+
+  it('I8: onaylı artışın başlangıcından işleyen tespit o dönemin bedelini değiştirir; tahakkuk etmiş taksitler FARK alır', async () => {
+    const id = await sozlesme()
+    const kasim = await taksit(id, '2026-11')
+    await prisma.taksit.update({ where: { id: kasim.id }, data: { durum: 'ODENDI' } })
+    await tufe12Gir(10, '31.20')
+    await hesapla()
+    const a = await prisma.artisHesabi.findFirstOrThrow({ where: { sozlesmeId: id } })
+    await artisOnayla(a.id, a.version, TEST_BAGLAMI, BUGUN)
+    // Artış FARK'ı ödendi: tahakkuk etmiştir.
+    const [artisFarki] = await prisma.taksit.findMany({ where: { sozlesmeId: id, tur: 'FARK' } })
+    await prisma.taksit.update({ where: { id: artisFarki!.id }, data: { durum: 'ODENDI' } })
+
+    await kiraBedeliDegistir(id, await surum(id), { baslangic: t('2026-11-01'), bedel: para('14000'), kaynak: 'TESPIT', aciklama: 'Tespit kararı 2026/9' }, TEST_BAGLAMI, BUGUN)
+    const kd = await donemler(id)
+    expect(kd.map((k) => [k.kaynak, iso(k.baslangic), iso(k.bitis), k.bedelTutari.toFixed(2), k.artisHesabiId, k.aciklama])).toEqual([
+      ['ILK', '2025-11-01', '2026-10-31', '10000.00', null, null],
+      ['TESPIT', '2026-11-01', null, '14000.00', null, 'Tespit kararı 2026/9'],
+    ])
+    const farklar = await prisma.taksit.findMany({ where: { sozlesmeId: id, tur: 'FARK' }, orderBy: { id: 'asc' } })
+    // 14.000 − (10.000 + ödenmiş 3.120) = 880; aynı kira dönemine bağlı, artış hesabı boş.
+    expect(farklar.map((f) => [f.anaTaksitId, f.tutar.toFixed(2), f.durum, f.kiraDonemiId, f.artisHesabiId])).toEqual([
+      [kasim.id, '3120.00', 'ODENDI', kd[1]!.id, a.id], [kasim.id, '880.00', 'PLANLANDI', kd[1]!.id, null],
+    ])
+    expect((await taksit(id, '2026-12')).tutar.toFixed(2)).toBe('14000.00')
+    expect((await prisma.artisHesabi.findUniqueOrThrow({ where: { id: a.id } })).durum).toBe('ONAYLANDI')
+    const kayit = await prisma.olayGunlugu.findFirstOrThrow({ where: { eylem: 'KIRA_BEDELI_DEGISTI', varlikId: String(id) } })
+    expect(kayit.sonra).toMatchObject({
+      baslangic: '2026-11-01', bedel: '14000.00', kaynak: 'TESPIT', farkTaksiti: 1,
+      degistirilenDonem: { kiraDonemiId: kd[1]!.id, oncekiBedel: '13120.00', oncekiKaynak: 'ARTIS', oncekiArtisHesabiId: a.id },
+    })
+    // Dönem artık tespit dönemidir: aynı tarihe ikinci değişiklik yeni dönem gibi reddedilir.
+    await expect(tespitTekrar(id)).rejects.toMatchObject({ kod: 'SIRA' })
+  })
+
+  it('I8: aynı tarihe tespit dışı (anlaşma, düzeltme) değişiklik ve son dönem artış dönemi değilse tespit yine SIRA ile reddedilir', async () => {
+    const id = await sozlesme()
+    await tufe12Gir(10, '31.20')
+    await hesapla()
+    const a = await prisma.artisHesabi.findFirstOrThrow({ where: { sozlesmeId: id } })
+    await artisOnayla(a.id, a.version, TEST_BAGLAMI, BUGUN)
+    for (const kaynak of ['ANLASMA', 'ELLE'] as const) {
+      await expect(kiraBedeliDegistir(id, await surum(id), { baslangic: t('2026-11-01'), bedel: para('14000'), kaynak, aciklama: 'Protokol' }, TEST_BAGLAMI, BUGUN))
+        .rejects.toMatchObject({ kod: 'SIRA' })
+    }
+    // İlk dönemin başlangıcına tespit (ILK dönem son dönem ve artış dönemi değil) reddedilir.
+    await expect(kiraBedeliDegistir(id, await surum(id), { baslangic: t('2025-11-01'), bedel: para('14000'), kaynak: 'TESPIT', aciklama: 'Karar' }, TEST_BAGLAMI, BUGUN))
+      .rejects.toMatchObject({ kod: 'SIRA' })
+    expect((await donemler(id)).map((k) => [k.kaynak, k.bedelTutari.toFixed(2)])).toEqual([['ILK', '10000.00'], ['ARTIS', '13120.00']])
   })
 })
 
