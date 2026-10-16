@@ -12,7 +12,7 @@ import { dbTarih, dbTarihOpt, oranYaz, paraDb, paraYaz, tarihDb, tarihDbOpt } fr
 import { BulunamadiHatasi, CakismaHatasi, IsKuraliHatasi, benzersizIhlaliMi } from '../hata'
 import { kisiGorunenAd } from '../kisi/servis'
 import { varsayilanEkonomikKod, vergiOranlari } from '../parametre/servis'
-import { fazlaOdemeHatirlat, taksitPlaniniGuncelle, vadesiGecmisMi } from '../taksit/servis'
+import { ODEME_SURECI, farkFazlaOdemeBildir, fazlaOdemeHatirlat, taksitPlaniniGuncelle, vadesiGecmisMi } from '../taksit/servis'
 import { damgaIlkKaydiOlustur } from '../damga/servis'
 import type { MalikGirdisi, SozlesmeGirdisi } from './sema'
 
@@ -231,6 +231,12 @@ async function yenilemeyeDevret(
         + 'ödendiyse yeni sözleşmenin aynı dönem taksitinden mahsup edin.',
     }, bugun, true)
   }
+  // Devredilen (iptal edilen) ana satırın ödeme sürecindeki FARK'ları iptal edilmez; yeni sözleşmenin aynı dönemi için mahsup gerekir.
+  const odemedekiFarklar = await tx.taksit.findMany({
+    where: { anaTaksitId: { in: idler }, tur: 'FARK', durum: { in: [...ODEME_SURECI] } },
+    include: { anaTaksit: { select: { donemBaslangic: true, donemBitis: true } } },
+  })
+  for (const f of odemedekiFarklar) await farkFazlaOdemeBildir(tx, o, f, f.anaTaksit!, bugun, yeni.sozlesmeNo)
   return idler
 }
 

@@ -455,9 +455,9 @@ describe('geç aktifleştirilen yenileme: önceki sözleşmenin çakışan planl
     expect(kayit.sonra).toMatchObject({ durum: 'SONA_ERDI', devredilenTaksitIdleri: devredilen.map((x) => x.id), plan: { iptal: 0, gecmisDokunulmadi: 0 } })
   })
 
-  it('vadesi geçmiş devredilen taksit için mahsup hatırlatması açılır; vadesi gelmemiş ve ödeme sürecindeki taksit için açılmaz', async () => {
+  it('vadesi geçmiş devredilen taksit için mahsup hatırlatması açılır; vadesi gelmemiş taksit için açılmaz; ödeme sürecindeki taksit için ödeme sürecinde metniyle açılır', async () => {
     const { eski } = await gecYenileme(async (id) => {
-      // Ocak 2027 ödeme sürecinde: dokunulmaz, devredilmez.
+      // Ocak 2027 ödeme sürecinde: dokunulmaz, devredilmez; F2: plan yeni sözleşmenin dönemine düşen bu satır için DEVIR hatırlatması açar.
       await prisma.taksit.updateMany({ where: { sozlesmeId: id, donemBaslangic: new Date('2027-01-01') }, data: { durum: 'PAKETTE' } })
     })
     const x = await taksitler(eski)
@@ -468,10 +468,14 @@ describe('geç aktifleştirilen yenileme: önceki sözleşmenin çakışan planl
     expect(h.map((k) => [k.anahtar, k.iliskiliTur, k.oncelik, k.kararGerekli, k.durum])).toEqual([
       [`H5_FAZLA:taksit:${ay('2026-11-01').id}:DEVIR`, 'taksit', 'KRITIK', true, 'ACIK'],
       [`H5_FAZLA:taksit:${ay('2026-12-01').id}:DEVIR`, 'taksit', 'KRITIK', true, 'ACIK'],
+      [`H5_FAZLA:taksit:${ay('2027-01-01').id}:DEVIR`, 'taksit', 'KRITIK', true, 'ACIK'],
     ])
     expect(h[0]!.baslik).toBe(`Fazla ödeme kontrolü — ${sozlesmeNo}`)
     expect(h[0]!.aciklama).toBe(
       `Önceki sözleşmenin 01.11.2026 – 30.11.2026 taksiti (vade 01.11.2026) yeni sözleşmeye (${sozlesmeNo}-Y1) devredildi; ödendiyse yeni sözleşmenin aynı dönem taksitinden mahsup edin.`,
+    )
+    expect(h[2]!.aciklama).toBe(
+      `Önceki sözleşmenin 01.01.2027 – 31.01.2027 taksiti (vade 01.01.2027) ödeme sürecinde (PAKETTE); yeni sözleşmenin (${sozlesmeNo}-Y1) aynı dönem taksitinden mahsup edin ya da paket kesinleşmediyse iptal edin.`,
     )
   })
 })

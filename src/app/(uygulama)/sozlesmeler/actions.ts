@@ -18,6 +18,7 @@ import { sozlesmeAktiflestir, sozlesmeOnizle, type OnizlemeCiktisi } from '@/ser
 import { belirsizSureliyeCevir, malikleriDegistir, sozlesmeFeshet, sozlesmeSonlandir, sozlesmeYenile, taslakSil } from '@/server/sozlesme/yasam-dongusu'
 import { damgaKaydiSemasi } from '@/server/damga/sema'
 import { damgaKaydiEkle, damgaKaydiIptal, damgaMakbuzBagla } from '@/server/damga/servis'
+import { taksitSistemDisiOdemeGeriAl, taksitSistemDisiOdendi } from '@/server/taksit/servis'
 import { basariDurumu, formDegerleri, formKimligi, formMetni, formSurum, hataDurumu, uyariIle, type FormDurumu } from '@/app/_lib/form'
 
 // İstemci bileşenlerinden gelen kimlikler FormData değil argümandır; yine de güvenilmez girdidir: PostgreSQL INTEGER aralığında doğrulanır.
@@ -272,8 +273,8 @@ export async function kiraBedeliDegistirAction(_: FormDurumu, f: FormData): Prom
   return durum
 }
 
-/** Damga sekmesi eylemleri: kayıt kimliği, sürüm ve sözleşme kimliği formdan gelir; H10 ve DAMGA_HATA için hatırlatmalar tazelenir. */
-async function damgaEylemi(f: FormData, basari: string, calistir: (baglam: IslemBaglami) => Promise<void>): Promise<FormDurumu> {
+/** Sözleşme sekmesi eylemleri (damga, taksit): kayıt kimliği, sürüm ve sözleşme kimliği formdan gelir; hatırlatmalar (H1, H10, DAMGA_HATA) tazelenir. */
+async function sekmeEylemi(f: FormData, basari: string, calistir: (baglam: IslemBaglami) => Promise<void>): Promise<FormDurumu> {
   const k = await kullaniciGerekli()
   const sozlesmeId = formKimligi(f, 'sozlesmeId')
   if (sozlesmeId === null) return { hata: 'Sözleşme kimliği geçersiz; sayfayı yenileyip tekrar deneyin.', alanHatalari: {}, tamam: false }
@@ -295,7 +296,7 @@ function damgaKimligi(f: FormData): { id: number; version: number } {
 }
 
 export async function damgaKaydiEkleAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
-  return damgaEylemi(f, 'Damga kaydı eklendi.', async (baglam) => {
+  return sekmeEylemi(f, 'Damga kaydı eklendi.', async (baglam) => {
     const g = damgaKaydiSemasi.parse({
       sozlesmeId: formKimligi(f, 'sozlesmeId'), olay: formMetni(f, 'olay'), olayTarihi: formMetni(f, 'olayTarihi'),
       matrah: formMetni(f, 'matrah') || null, tahsil: formMetni(f, 'tahsil'),
@@ -305,7 +306,7 @@ export async function damgaKaydiEkleAction(_: FormDurumu, f: FormData): Promise<
 }
 
 export async function damgaMakbuzBaglaAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
-  return damgaEylemi(f, 'Makbuz bağlandı.', async (baglam) => {
+  return sekmeEylemi(f, 'Makbuz bağlandı.', async (baglam) => {
     const { id, version } = damgaKimligi(f)
     const belgeId = formKimligi(f, 'belgeId')
     if (belgeId === null) throw new IsKuraliHatasi('BELGE', 'Makbuz seçin.', 'belgeId')
@@ -314,8 +315,32 @@ export async function damgaMakbuzBaglaAction(_: FormDurumu, f: FormData): Promis
 }
 
 export async function damgaKaydiIptalAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
-  return damgaEylemi(f, 'Damga kaydı iptal edildi.', async (baglam) => {
+  return sekmeEylemi(f, 'Damga kaydı iptal edildi.', async (baglam) => {
     const { id, version } = damgaKimligi(f)
     await damgaKaydiIptal(id, version, formMetni(f, 'neden'), baglam)
+  })
+}
+
+function taksitKimligi(f: FormData): { id: number; version: number } {
+  const id = formKimligi(f, 'taksitId')
+  const version = formSurum(f)
+  if (id === null || version === undefined) throw new IsKuraliHatasi('ID', 'Taksit kimliği geçersiz; sayfayı yenileyip tekrar deneyin.')
+  return { id, version }
+}
+
+/** Paket dışında (F2 öncesi ya da sistem dışında) ödenmiş taksit; H1 gecikme hatırlatması kapanır. */
+export async function taksitSistemDisiOdendiAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
+  return sekmeEylemi(f, 'Taksit sistem dışında ödendi olarak işaretlendi.', async (baglam) => {
+    const { id, version } = taksitKimligi(f)
+    const tarih = tarihAyristir(formMetni(f, 'odemeTarihi'))
+    if (!tarih.ok) throw new IsKuraliHatasi('TARIH', tarih.hata.mesaj, 'odemeTarihi')
+    await taksitSistemDisiOdendi(id, version, { odemeTarihi: tarih.deger, not: formMetni(f, 'not') }, baglam)
+  })
+}
+
+export async function taksitSistemDisiGeriAlAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
+  return sekmeEylemi(f, 'Sistem dışı ödeme işareti geri alındı.', async (baglam) => {
+    const { id, version } = taksitKimligi(f)
+    await taksitSistemDisiOdemeGeriAl(id, version, baglam)
   })
 }

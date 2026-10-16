@@ -274,7 +274,14 @@ async function farklariIsle(
       taksitler: {
         where: {
           tur: { in: ['NORMAL', 'KIST'] }, donemBitis: { gte: dbTarih(d) },
-          OR: [{ durum: { in: ['PAKETTE', 'ODEME_EMRINDE', 'ODENDI'] } }, { durum: 'PLANLANDI', vadeTarihi: { lt: gun } }],
+          OR: [
+            { durum: { in: ['PAKETTE', 'ODEME_EMRINDE', 'ODENDI'] } }, { durum: 'PLANLANDI', vadeTarihi: { lt: gun } },
+            // Tahakkuk etmiş FARK'ı yüzünden donmuş planlı satır (paket iptali sonrası): yeniden fiyatlanmadığından farkı burada işlenir.
+            {
+              durum: 'PLANLANDI',
+              farkTaksitleri: { some: { OR: [{ durum: { in: ['PAKETTE', 'ODEME_EMRINDE', 'ODENDI'] } }, { durum: 'PLANLANDI', vadeTarihi: { lt: gun } }] } },
+            },
+          ],
         },
         include: { farkTaksitleri: { where: { durum: { not: 'IPTAL' } } } },
         orderBy: { donemBaslangic: 'asc' },
