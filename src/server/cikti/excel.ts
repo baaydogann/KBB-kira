@@ -29,7 +29,8 @@ export async function excelUret(sayfalar: readonly ExcelSayfasi[]): Promise<Buff
   const wb = new ExcelJS.Workbook()
   wb.creator = 'KBB Kira Takip'
   for (const s of sayfalar) {
-    const ws = wb.addWorksheet(s.ad, { views: [{ state: 'frozen', ySplit: 1 }] })
+    // Excel sayfa adı en çok 31 karakterdir ve * ? : \ / [ ] içeremez.
+    const ws = wb.addWorksheet(s.ad.replace(/[*?:\\/[\]]/g, '-').slice(0, 31), { views: [{ state: 'frozen', ySplit: 1 }] })
     ws.columns = s.sutunlar.map((c) => ({ header: c.baslik, width: c.genislik ?? VARSAYILAN_GENISLIK[c.tur] }))
     ws.getRow(1).font = { bold: true }
     for (const satir of s.satirlar) {

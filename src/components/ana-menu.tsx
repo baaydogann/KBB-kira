@@ -8,6 +8,7 @@ const OGELER = [
   { href: '/', etiket: 'Pano' },
   { href: '/sozlesmeler', etiket: 'Sözleşmeler' },
   { href: '/odeme-paketleri', etiket: 'Ödeme paketleri' },
+  { href: '/raporlar', etiket: 'Raporlar' },
   { href: '/tasinmazlar', etiket: 'Taşınmazlar' },
   { href: '/kisiler', etiket: 'Malikler' },
   { href: '/birimler', etiket: 'Birimler' },

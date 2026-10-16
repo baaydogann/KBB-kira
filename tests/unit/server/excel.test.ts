@@ -33,4 +33,9 @@ describe('excelUret', () => {
     expect(ws.getCell('D2').value).toBe(null)
     expect(ws.getCell('A4').value).toBe('Dipnot metni')
   })
+
+  it('sayfa adındaki yasak karakterler (* ? : \\ / [ ]) tireye çevrilir, ad 31 karakterle sınırlanır', async () => {
+    const ws = await oku(await excelUret([{ ad: '22/A [ö]:*?\\ kesinti listesi uzun ad', sutunlar: [{ baslik: 'A', tur: 'metin' }], satirlar: [] }]))
+    expect(ws.name).toBe('22-A -ö----- kesinti listesi uz')
+  })
 })
