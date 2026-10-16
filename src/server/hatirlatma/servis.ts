@@ -7,6 +7,7 @@ import type { IslemBaglami } from '../baglam'
 import { prisma, type Tx } from '../db'
 import { denetimKaydi } from '../denetim'
 import { dbTarih, tarihDb, tarihDbOpt } from '../donustur'
+import { artisIcinYururluk, artisYururlukSorgusu } from '../artis/servis'
 import { onayliOranlariYukle } from '../endeks/oranlar'
 import { BulunamadiHatasi, CakismaHatasi, IsKuraliHatasi } from '../hata'
 import { hatirlatmaAyarlari, parametreBitisleri, statuKurallari } from '../parametre/servis'
@@ -24,8 +25,9 @@ export async function hatirlatmaVerisiYukle(tx: Tx, bugun: Tarih): Promise<Hatir
     hatirlatmaAyarlari(bugun, tx), tatilKumesi(gunEkle(bugun, -400), gunEkle(bugun, 400), tx), statuKurallari(bugun, tx),
     onayliOranlariYukle(tx), parametreBitisleri(bugun, tx),
   ])
+  // Yürürlükteki sözleşmeler: ileri tarihli fesih/sona erme etkin bitişe kadar dahildir (yalnızca H5 ve H12 alır).
   const sozlesmeler = await tx.sozlesme.findMany({
-    where: { durum: { in: ['AKTIF', 'UZADI'] } },
+    where: artisYururlukSorgusu(bugun),
     include: {
       tasinmaz: true,
       kiraDonemleri: { orderBy: { baslangic: 'desc' }, take: 1 },
@@ -49,7 +51,9 @@ export async function hatirlatmaVerisiYukle(tx: Tx, bugun: Tarih): Promise<Hatir
   const pdfVar = new Set(pdfler.map((p) => p.sahipId))
   return {
     bugun, tatiller, ayarlar,
-    sozlesmeler: sozlesmeler.map((s) => {
+    sozlesmeler: sozlesmeler.flatMap((s) => {
+      const yururluk = artisIcinYururluk(s, bugun)
+      if (yururluk === null) return []
       const eksikler: EksikVeri[] = []
       // Eksik veri, bugünün maliklerine göre değerlendirilir: ileri tarihli değişiklikte gelecek malik henüz sayılmaz, bugünkü malik sayılır.
       // Henüz başlamamış (ör. yenileme) sözleşmede "bugün" sözleşmenin ilk günüdür.
@@ -61,12 +65,13 @@ export async function hatirlatmaVerisiYukle(tx: Tx, bugun: Tarih): Promise<Hatir
       if (!pdfVar.has(s.id)) eksikler.push('SOZLESME_PDF_YOK')
       if (bugunku.some((m) => statuler[m.kisi.vergiStatusu].teyitGerekli && !m.kisi.statuTeyitli)) eksikler.push('STATU_TEYIT')
       if (!s.onayBelgesiNo) eksikler.push('ONAY_BELGESI_YOK')
-      return {
+      return [{
         id: String(s.id), no: s.sozlesmeNo, kisaAd: s.tasinmaz.kisaAd, tasinmazTuru: s.tasinmaz.tur,
         baslangic, bitis: tarihDbOpt(s.bitis), ilkKiraBaslangici: tarihDb(s.ilkKiraBaslangici),
         sonKiraDonemiBaslangici: s.kiraDonemleri[0] ? tarihDb(s.kiraDonemleri[0].baslangic) : baslangic,
         uzamaSayisi: s.uzamaSayisi, artisKurali: s.artisKurali, artisPeriyoduAy: s.artisPeriyoduAy, eksikler,
-      }
+        sonaErmekte: yururluk.sonaErmekte, bitisEtkin: yururluk.bitisEtkin,
+      }]
     }),
     planliTaksitler: taksitler.map((x) => ({
       id: String(x.id), sozlesmeId: String(x.sozlesmeId), sozlesmeNo: x.sozlesme.sozlesmeNo, kisaAd: x.sozlesme.tasinmaz.kisaAd,

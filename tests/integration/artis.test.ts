@@ -13,6 +13,9 @@ import { para } from '@/core/para'
 import { ayEkle, ayinIlkGunu, ayKaydir, bugunIstanbul, gunEkle, tarih as t, tarihinAyi, type Tarih } from '@/core/tarih'
 import { artisElleOranGir, artisOnayla, artislariHesapla, kiraBedeliDegistir } from '@/server/artis/servis'
 import { endeksElleGir } from '@/server/endeks/servis'
+import { hatirlatmalariUret } from '@/core/hatirlatma'
+import { hatirlatmaVerisiYukle } from '@/server/hatirlatma/servis'
+import { sozlesmeFeshet } from '@/server/sozlesme/yasam-dongusu'
 import { sozlesmeAktiflestir, sozlesmeTaslakKaydet } from '@/server/sozlesme/servis'
 import { taksitPlaniniGuncelle } from '@/server/taksit/servis'
 import { CakismaHatasi, IsKuraliHatasi } from '@/server/hata'
@@ -155,6 +158,57 @@ describe('C1: vadesi geçmiş PLANLANDI taksit tahakkuk etmiş sayılır', () =>
     // Ekim'in ilk FARK'ı (2.000) vadesi geçtiği için tahakkuk etmiş sayılır: iptal edilmez, kalan 1.000 yeni FARK olur (3.000 değil).
     expect(ekimFarklari.map((f) => [f.id === ilk!.id, f.tutar.toFixed(2), f.durum])).toEqual([[true, '2000.00', 'PLANLANDI'], [false, '1000.00', 'PLANLANDI']])
     expect((await taksit(id, '2026-10')).tutar.toFixed(2)).toBe('10000.00')
+  })
+})
+
+describe('I2: ileri tarihli fesih ve sona erme bitişe kadar yürürlüktedir', () => {
+  const surum = async (id: number) => (await prisma.sozlesme.findUniqueOrThrow({ where: { id } })).version
+  const h5 = async (id: number, bugun: Tarih) =>
+    hatirlatmalariUret(await prisma.$transaction((tx) => hatirlatmaVerisiYukle(tx, bugun))).filter((x) => x.kural === 'H5' && x.sozlesmeId === String(id))
+
+  it('ileri tarihli fesihten önceki artış hesaplanır, hatırlatılır ve onaylanır', async () => {
+    const id = await sozlesme()
+    await sozlesmeFeshet(id, await surum(id), { tarih: t('2027-03-31'), neden: 'Hizmet binası taşınacak' }, TEST_BAGLAMI, BUGUN)
+    expect((await h5(id, BUGUN)).map((x) => [x.anahtar, x.baslik])).toEqual([[`H5:sozlesme:${id}:2026-11-01`, expect.stringContaining('yaklaşıyor')]])
+    await tufe12Gir(10, '31.20')
+    expect(await hesapla()).toEqual({ hesaplanan: 1, bekleyen: 0 })
+    const a = await prisma.artisHesabi.findFirstOrThrow({ where: { sozlesmeId: id } })
+    expect((await h5(id, BUGUN)).map((x) => x.kararGerekli)).toEqual([true])
+    await artisOnayla(a.id, a.version, TEST_BAGLAMI, BUGUN)
+    expect((await prisma.artisHesabi.findUniqueOrThrow({ where: { id: a.id } })).durum).toBe('ONAYLANDI')
+    expect((await taksit(id, '2026-11')).tutar.toFixed(2)).toBe('13120.00')
+    expect(await h5(id, BUGUN)).toEqual([])
+  })
+
+  it('fesih tarihinden sonra başlayan artış hesaplanmaz; fesih tarihi geçince sözleşme hesaptan, onaydan ve hatırlatmadan düşer', async () => {
+    const sonra = await sozlesme()
+    await sozlesmeFeshet(sonra, await surum(sonra), { tarih: t('2026-10-31'), neden: 'Hizmet binası taşınacak' }, TEST_BAGLAMI, BUGUN)
+    expect(await h5(sonra, BUGUN)).toEqual([])
+    const once = await sozlesme()
+    await sozlesmeFeshet(once, await surum(once), { tarih: t('2026-11-15'), neden: 'Hizmet binası taşınacak' }, TEST_BAGLAMI, BUGUN)
+    await tufe12Gir(10, '31.20')
+    expect(await hesapla()).toEqual({ hesaplanan: 1, bekleyen: 0 })
+    expect(await prisma.artisHesabi.count({ where: { sozlesmeId: sonra } })).toBe(0)
+    const a = await prisma.artisHesabi.findFirstOrThrow({ where: { sozlesmeId: once } })
+    const ertesi = t('2026-11-16')
+    await expect(artisOnayla(a.id, a.version, TEST_BAGLAMI, ertesi)).rejects.toMatchObject({ kod: 'DURUM' })
+    expect(await prisma.$transaction((tx) => artislariHesapla(tx, ertesi))).toEqual({ hesaplanan: 0, bekleyen: 0 })
+    expect((await prisma.$transaction((tx) => hatirlatmaVerisiYukle(tx, ertesi))).sozlesmeler.map((x) => x.id)).not.toContain(String(once))
+    // Fesih günü dahil yürürlüktedir.
+    expect((await prisma.$transaction((tx) => hatirlatmaVerisiYukle(tx, t('2026-11-15')))).sozlesmeler.find((x) => x.id === String(once)))
+      .toMatchObject({ sonaErmekte: true, bitisEtkin: '2026-11-15' })
+  })
+
+  it('bitişi gelmemiş SONA_ERDI sözleşmenin bitişe kadarki artışı hesaplanır ve onaylanır; ELLE oran girilebilir', async () => {
+    const id = await sozlesme({ artisKurali: 'ELLE', baslangic: '2025-10-01', bitis: '2027-09-30' })
+    await prisma.sozlesme.update({ where: { id }, data: { durum: 'SONA_ERDI', bitis: new Date('2026-12-31'), version: { increment: 1 } } })
+    expect(await hesapla()).toEqual({ hesaplanan: 0, bekleyen: 1 })
+    const a = await prisma.artisHesabi.findFirstOrThrow({ where: { sozlesmeId: id } })
+    await artisElleOranGir(a.id, a.version, { oran: para('20'), gerekce: 'Malikle yazılı anlaşma' }, TEST_BAGLAMI, BUGUN)
+    const b = await prisma.artisHesabi.findUniqueOrThrow({ where: { id: a.id } })
+    expect([b.durum, b.yeniBedel?.toFixed(2)]).toEqual(['HESAPLANDI', '12000.00'])
+    await artisOnayla(b.id, b.version, TEST_BAGLAMI, BUGUN)
+    expect(await prisma.kiraDonemi.count({ where: { sozlesmeId: id } })).toBe(2)
   })
 })
 

@@ -615,6 +615,19 @@ describe('işler', () => {
     expect((await prisma.artisHesabi.findFirstOrThrow({ where: { sozlesmeId: id } })).durum).toBe('HESAPLANDI')
   })
 
+  it('takvim işi: ileri tarihli feshedilmiş ve bitişi gelmemiş sona ermiş sözleşmelerin artışını da hesaplar (I2)', async () => {
+    const bugun = t('2026-10-20')
+    const feshedilen = await aktif({ baslangic: '2025-11-01', bitis: '2027-10-31' }, t('2025-11-01'))
+    await prisma.sozlesme.update({ where: { id: feshedilen }, data: { durum: 'FESHEDILDI', fesihTarihi: new Date('2027-03-31') } })
+    const sonaEren = await aktif({ baslangic: '2025-11-01', bitis: '2027-10-31' }, t('2025-11-01'))
+    await prisma.sozlesme.update({ where: { id: sonaEren }, data: { durum: 'SONA_ERDI', bitis: new Date('2026-12-31') } })
+    const bitmis = await aktif({ baslangic: '2025-11-01', bitis: '2027-10-31' }, t('2025-11-01'))
+    await prisma.sozlesme.update({ where: { id: bitmis }, data: { durum: 'FESHEDILDI', fesihTarihi: new Date('2026-10-19') } })
+    const r = await ISLER['takvim-guncelle'](bugun)
+    expect(r.ozet).toContain('artış hesaplanan: 0, endeks bekleyen: 2')
+    expect((await prisma.artisHesabi.findMany({ orderBy: { sozlesmeId: 'asc' } })).map((a) => a.sozlesmeId)).toEqual([feshedilen, sonaEren])
+  })
+
   it('takvim işi: planı üretilemeyen sözleşme (IsKuraliHatasi) bildirilir, diğer sözleşmeler işlenir', async () => {
     const uzun = { baslangic: '2026-01-01', bitis: null }
     const iyi = await aktif(uzun)

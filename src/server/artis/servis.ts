@@ -2,9 +2,10 @@ import { artisHesapla, type ArtisSonucu } from '@/core/hesap/artis'
 import { HESAP_SURUMU, type TaksitGoruntusu } from '@/core/hesap/goruntu'
 import { taksitTutari } from '@/core/hesap/taksit-tutari'
 import { formatTL, para, type Para } from '@/core/para'
-import { artisTarihleri } from '@/core/takvim'
+import { artisTarihleri, artisYururlugu, type ArtisYururlugu } from '@/core/takvim'
 import { bugunIstanbul, enBuyukTarih, enKucukTarih, formatTarih, gunEkle, icindeMi, karsilastir, type Tarih } from '@/core/tarih'
-import type { OdemePeriyodu } from '@/core/tipler'
+import type { OdemePeriyodu, SozlesmeDurumu } from '@/core/tipler'
+import type { Prisma } from '@/generated/prisma'
 import { SISTEM_BAGLAMI, type IslemBaglami } from '../baglam'
 import { prisma, type Tx } from '../db'
 import { denetimKaydi } from '../denetim'
@@ -21,7 +22,19 @@ const ISLEM = { timeout: 60_000 }
 /** Serbest metin alanlarının üst sınırı (sözleşme şemasındaki `opsMetin` ile aynı). */
 const METIN_SINIRI = 500
 
+/** Bedel değişikliği (tespit, anlaşma, düzeltme) yalnızca yürürlükteki (AKTIF/UZADI) sözleşmede yapılır. */
 const yururlukteMi = (durum: string): boolean => durum === 'AKTIF' || durum === 'UZADI'
+
+/** Artış hesabı, onayı ve H5 için yürürlük (`artisYururlugu`): ileri tarihli fesih ya da sona erme etkin bitişe kadar yürürlükte sayılır. */
+export function artisIcinYururluk(s: { durum: SozlesmeDurumu; bitis: Date | null; fesihTarihi: Date | null }, bugun: Tarih): ArtisYururlugu | null {
+  return artisYururlugu({ durum: s.durum, bitis: tarihDbOpt(s.bitis), fesihTarihi: tarihDbOpt(s.fesihTarihi) }, bugun)
+}
+
+/** `artisYururlugu`nun aday süzgeci (sorgu); kesin karar kilitten sonra `artisYururlugu` ile verilir. */
+export function artisYururlukSorgusu(bugun: Tarih): Prisma.SozlesmeWhereInput {
+  const gun = dbTarih(bugun)
+  return { OR: [{ durum: { in: ['AKTIF', 'UZADI'] } }, { durum: 'FESHEDILDI', fesihTarihi: { gte: gun } }, { durum: 'SONA_ERDI', bitis: { gte: gun } }] }
+}
 
 /** Henüz onaylanmamış (hâlâ onaya konu olabilen) artış durumları. */
 const ACIK_ARTIS_DURUMLARI: ('BEKLEMEDE' | 'HESAPLANDI')[] = ['BEKLEMEDE', 'HESAPLANDI']
@@ -69,11 +82,13 @@ async function sozlesmeArtisiniHesapla(tx: Tx, sozlesmeId: number, o: HesapOrtam
     where: { id: sozlesmeId },
     include: { tasinmaz: true, kiraDonemleri: { orderBy: { baslangic: 'asc' } }, artislar: { where: { durum: { not: 'IPTAL' } } } },
   })
-  if (!s || !yururlukteMi(s.durum) || s.artisKurali === 'YOK') return null
+  const yururluk = s === null ? null : artisIcinYururluk(s, o.bugun)
+  if (!s || yururluk === null || s.artisKurali === 'YOK') return null
   const kd = kiraDonemiGirdileri(s.kiraDonemleri)
   const sonKd = kd.at(-1)
   if (!sonKd) return null
-  const son = s.bitis === null ? o.ufuk : enKucukTarih(tarihDb(s.bitis), o.ufuk)
+  // Sona ermekte olan sözleşmede etkin bitiş (fesih tarihi) sınırdır: ondan sonra başlayan artış hesaplanmaz.
+  const son = yururluk.bitisEtkin === null ? o.ufuk : enKucukTarih(yururluk.bitisEtkin, o.ufuk)
   const d = artisTarihleri({ ilkKiraBaslangici: tarihDb(s.ilkKiraBaslangici), periyotAy: s.artisPeriyoduAy, sonTarih: son })
     .find((x) => karsilastir(x, sonKd.baslangic) > 0)
   if (d === undefined) return null
@@ -167,7 +182,7 @@ export async function artislariHesapla(tx: Tx, bugun: Tarih, sozlesmeId?: number
     bugun, baglam, ufuk: gunEkle(bugun, await parametreTamsayi('ARTIS_HESAP_UFUK_GUN', bugun, tx)), oranlar: await onayliOranlariYukle(tx),
   }
   const adaylar = await tx.sozlesme.findMany({
-    where: { durum: { in: ['AKTIF', 'UZADI'] }, artisKurali: { not: 'YOK' }, ...(sozlesmeId === undefined ? {} : { id: sozlesmeId }) },
+    where: { ...artisYururlukSorgusu(bugun), artisKurali: { not: 'YOK' }, ...(sozlesmeId === undefined ? {} : { id: sozlesmeId }) },
     select: { id: true, sozlesmeNo: true },
     orderBy: { id: 'desc' },
   })
@@ -275,10 +290,12 @@ async function yeniKiraDonemiAc(
   tx: Tx, sozlesmeId: number, d: Tarih, bedel: Para, kaynak: 'ARTIS' | 'TESPIT' | 'ANLASMA' | 'ELLE',
   artisHesabiId: number | null, aciklama: string | null, baglam: IslemBaglami, bugun: Tarih,
 ): Promise<DonemAcmaOzeti> {
-  const s = await tx.sozlesme.findUnique({ where: { id: sozlesmeId }, select: { durum: true, bitis: true } })
+  const s = await tx.sozlesme.findUnique({ where: { id: sozlesmeId }, select: { durum: true, bitis: true, fesihTarihi: true } })
   if (!s) throw new BulunamadiHatasi('Sözleşme bulunamadı.')
-  if (!yururlukteMi(s.durum)) throw new IsKuraliHatasi('DURUM', 'Yalnızca yürürlükteki sözleşmenin bedeli değiştirilir.')
-  const bitis = tarihDbOpt(s.bitis)
+  // Artış onayı ileri tarihli fesih/sona ermede de yapılır (bedel değişikliği yürürlüğü kendisi daha dar denetler); sınır etkin bitiştir.
+  const yururluk = artisIcinYururluk(s, bugun)
+  if (yururluk === null) throw new IsKuraliHatasi('DURUM', 'Yalnızca yürürlükteki sözleşmenin bedeli değiştirilir.')
+  const bitis = yururluk.bitisEtkin
   if (bitis !== null && karsilastir(d, bitis) > 0) throw new IsKuraliHatasi('BASLANGIC', 'Başlangıç tarihi sözleşme bitişinden sonra olamaz.', 'baslangic')
   const donemler = await tx.kiraDonemi.findMany({ where: { sozlesmeId }, orderBy: { baslangic: 'asc' } })
   if (donemler.some((k) => karsilastir(tarihDb(k.baslangic), d) >= 0)) {
@@ -331,7 +348,7 @@ export async function artisElleOranGir(id: number, version: number, g: { oran: P
     const a = await tx.artisHesabi.findUnique({ where: { id }, include: { sozlesme: true } })
     if (!a) throw new BulunamadiHatasi('Artış hesabı bulunamadı.')
     if (a.version !== version) throw new CakismaHatasi()
-    if (a.sozlesme.artisKurali !== 'ELLE' || a.durum !== 'BEKLEMEDE' || !yururlukteMi(a.sozlesme.durum)) {
+    if (a.sozlesme.artisKurali !== 'ELLE' || a.durum !== 'BEKLEMEDE' || artisIcinYururluk(a.sozlesme, bugun) === null) {
       throw new IsKuraliHatasi('DURUM', 'Elle oran yalnızca yürürlükteki sözleşmede "her dönem elle" kuralındaki bekleyen artışa girilir.')
     }
     const r = await tx.artisHesabi.updateMany({

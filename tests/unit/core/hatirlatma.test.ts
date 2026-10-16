@@ -15,6 +15,7 @@ function sozlesme(ek: Partial<SozlesmeOzeti> = {}): SozlesmeOzeti {
     id: '1', no: 'S-1', kisaAd: 'Meram depo', tasinmazTuru: 'ISYERI',
     baslangic: t('2025-01-01'), bitis: t('2027-12-31'), ilkKiraBaslangici: t('2025-01-01'),
     sonKiraDonemiBaslangici: t('2026-01-01'), uzamaSayisi: 0, artisKurali: 'YOK', artisPeriyoduAy: 12, eksikler: [],
+    sonaErmekte: false, bitisEtkin: t('2027-12-31'),
     ...ek,
   }
 }
@@ -194,6 +195,36 @@ describe('H5 artış', () => {
   it('açık uçlu arsa sözleşmesinde artış ufka kadar aranır', () => {
     expect(bul(veri({ sozlesmeler: [artisli({ tasinmazTuru: 'ARSA', bitis: null })] }), 'H5').map((x) => x.anahtar))
       .toEqual(['H5:sozlesme:1:2026-11-01'])
+  })
+})
+
+describe('I2: sona ermekte olan sözleşme (ileri tarihli fesih / sona erme)', () => {
+  /** Konut: AKTIF iken H5 (2026-11-01), H6 (77 gün), H7 (2026-11-01 tespit) ve H12 üretir. */
+  const konut = (ek: Partial<SozlesmeOzeti> = {}) => sozlesme({
+    tasinmazTuru: 'KONUT', ilkKiraBaslangici: t('2021-11-01'), baslangic: t('2021-11-01'), sonKiraDonemiBaslangici: t('2025-11-01'),
+    bitis: t('2026-12-31'), bitisEtkin: t('2026-12-31'), artisKurali: 'TUFE12', eksikler: ['IBAN_YOK'], ...ek,
+  })
+  const sozlesmeKurallari = (s: SozlesmeOzeti, bugun = '2026-10-15') =>
+    new Set(kurallar(veri({ bugun: t(bugun), sozlesmeler: [s], sonOnayliTufe12Ayi: null })).filter((x) => x.sozlesmeId === '1').map((x) => x.kural))
+
+  it('yalnızca H5 ve H12 üretir; H6 ve H7 üretmez', () => {
+    expect(sozlesmeKurallari(konut())).toEqual(new Set(['H5', 'H6', 'H7', 'H12']))
+    expect(sozlesmeKurallari(konut({ sonaErmekte: true, bitisEtkin: t('2026-11-10') }))).toEqual(new Set(['H5', 'H12']))
+  })
+
+  it('H6_SON_GUN ve H8 üretmez', () => {
+    const aktif = sozlesme({ uzamaSayisi: 10, bitis: t('2027-02-28') })
+    expect(sozlesmeKurallari(aktif, '2026-11-01')).toEqual(new Set(['H8']))
+    expect(sozlesmeKurallari({ ...aktif, sonaErmekte: true, bitisEtkin: t('2026-12-31') }, '2026-11-01')).toEqual(new Set())
+    const sonGun = sozlesme({ bitis: t('2026-12-31') })
+    expect(sozlesmeKurallari(sonGun, '2026-12-05')).toEqual(new Set(['H6', 'H6_SON_GUN']))
+    expect(sozlesmeKurallari({ ...sonGun, sonaErmekte: true, bitisEtkin: t('2026-12-20') }, '2026-12-05')).toEqual(new Set())
+  })
+
+  it('artış tarihi etkin bitişe eşit ya da önceyse hatırlatılır, sonraysa hatırlatılmaz (TBK 347 ufku uygulanmaz)', () => {
+    const h5 = (bitisEtkin: string) => bul(veri({ sozlesmeler: [konut({ sonaErmekte: true, bitisEtkin: t(bitisEtkin) })] }), 'H5').map((x) => x.anahtar)
+    expect(h5('2026-11-01')).toEqual(['H5:sozlesme:1:2026-11-01'])
+    expect(h5('2026-10-31')).toEqual([])
   })
 })
 

@@ -69,7 +69,8 @@ describe('hatırlatma üretimi', () => {
 
   it('sona ermiş sözleşmenin planlı taksiti hatırlatılmaya devam eder; sözleşme kuralları susar', async () => {
     const id = await sozlesme()
-    await prisma.sozlesme.update({ where: { id }, data: { durum: 'SONA_ERDI' } })
+    // Bitişi geçmiş: bitişi gelmemiş SONA_ERDI sözleşme bitişine kadar yürürlükte sayılır (I2) ve H5/H12 alır.
+    await prisma.sozlesme.update({ where: { id }, data: { durum: 'SONA_ERDI', bitis: new Date('2026-10-14') } })
     await uret()
     const kurallar = (await prisma.hatirlatma.findMany({ where: { sozlesmeId: id } })).map((k) => k.kural)
     expect(kurallar.filter((k) => k === 'H1')).toHaveLength(10) // 9 gecikmiş + Ekim (vade 2026-10-20)

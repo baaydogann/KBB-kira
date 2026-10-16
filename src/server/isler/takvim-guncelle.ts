@@ -50,7 +50,8 @@ async function sozlesmeyiIsle(a: Aday, bugun: Tarih): Promise<SozlesmeSonucu> {
       s.hatalar.push(iletiOlustur(a, e))
     }
 
-    if (a.durum !== 'FESHEDILDI' && a.artisKurali !== 'YOK') {
+    // Yürürlük (ileri tarihli fesih/sona erme dahil) artislariHesapla içinde, kilitten sonra denetlenir.
+    if (a.artisKurali !== 'YOK') {
       try {
         const artis = await artislariHesapla(tx, bugun, a.id)
         s.hesaplanan = artis.hesaplanan
@@ -99,7 +100,8 @@ async function takvimHatasiniBildir(a: Aday, e: unknown, bugun: Tarih): Promise<
 export async function takvimIsi(bugun: Tarih): Promise<IsSonucu> {
   const r = await tekKopya('takvim-guncelle', async () => {
     const adaylar: Aday[] = await prisma.sozlesme.findMany({
-      where: { durum: { in: ['AKTIF', 'UZADI', 'FESHEDILDI'] } },
+      // Bitişi gelmemiş sona ermiş sözleşme (yenileme kesimi) de aday: bitişine kadarki artışı hesaplanır.
+      where: { OR: [{ durum: { in: ['AKTIF', 'UZADI', 'FESHEDILDI'] } }, { durum: 'SONA_ERDI', bitis: { gte: dbTarih(bugun) } }] },
       select: { id: true, sozlesmeNo: true, durum: true, artisKurali: true },
       orderBy: { id: 'desc' },
     })

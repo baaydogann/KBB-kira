@@ -1,5 +1,6 @@
 import type { HesapSatiri } from '@/core/hesap/goruntu'
-import { ayAdi } from '@/core/tarih'
+import { ayAdi, bugunIstanbul } from '@/core/tarih'
+import { artisIcinYururluk } from '@/server/artis/servis'
 import { tarihDbOpt } from '@/server/donustur'
 import type { SozlesmeDetayi } from '@/server/sozlesme/sorgu'
 import { Kart } from '@/components/ui/kart'
@@ -21,6 +22,8 @@ const ELLE_ORAN_ALANLARI: EylemAlani[] = [
 /** `ufukGun`: ARTIS_HESAP_UFUK_GUN parametresi (artış tarihine kaç gün kala günlük işin hesapladığı); tanımsızsa null. */
 export function DonemlerSekmesi({ s, ufukGun }: { s: SozlesmeDetayi; ufukGun: number | null }) {
   const yururlukte = s.durum === 'AKTIF' || s.durum === 'UZADI'
+  // Artış hesabı, elle oran ve onay ileri tarihli fesih/sona ermede de etkin bitişe kadar yapılır (bedel değişikliği yapılmaz).
+  const artisYururlukte = artisIcinYururluk(s, bugunIstanbul()) !== null
   // Yeni kira dönemi açılınca, o tarihte ya da öncesinde başlayan onaysız artışlar bir daha onaylanamaz (sıra kuralı).
   const sonKiraBaslangici = s.kiraDonemleri.at(-1)?.baslangic.getTime() ?? 0
   const bedelAlanlari: EylemAlani[] = [
@@ -48,7 +51,7 @@ export function DonemlerSekmesi({ s, ufukGun }: { s: SozlesmeDetayi; ufukGun: nu
         </Tablo>
       </Kart>
 
-      <Kart baslik="Artış hesapları" eylemler={yururlukte && s.artisKurali !== 'YOK' ? (
+      <Kart baslik="Artış hesapları" eylemler={artisYururlukte && s.artisKurali !== 'YOK' ? (
         <EylemFormu eylem={artislariSimdiHesaplaAction} dugme="Şimdi hesapla"><input type="hidden" name="id" value={s.id} /></EylemFormu>
       ) : null}>
         {s.artislar.length === 0 ? <p className="text-sm text-slate-600">Henüz artış hesabı yok. Sıradaki artış tarihine {ufukGun === null ? 'yaklaşınca' : `${ufukGun} gün kala`} günlük işle hesaplanır.</p> : (
@@ -57,7 +60,7 @@ export function DonemlerSekmesi({ s, ufukGun }: { s: SozlesmeDetayi; ufukGun: nu
             <tbody className="divide-y divide-slate-100">
               {s.artislar.map((a) => {
                 const gerekce = (a.gerekce ?? {}) as { satirlar?: HesapSatiri[]; neden?: string; eksikSeriler?: string[] }
-                const acik = (a.durum === 'BEKLEMEDE' || a.durum === 'HESAPLANDI') && yururlukte
+                const acik = (a.durum === 'BEKLEMEDE' || a.durum === 'HESAPLANDI') && artisYururlukte
                 const gecersiz = acik && a.donemBaslangic.getTime() <= sonKiraBaslangici
                 return (
                   <tr key={a.id}>

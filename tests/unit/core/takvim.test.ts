@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
-import { artisTarihleri, odemeDonemleri, tespitTarihleri, uzamaBitisi, vadeTarihi } from '@/core/takvim'
+import { artisTarihleri, artisYururlugu, odemeDonemleri, tespitTarihleri, uzamaBitisi, vadeTarihi } from '@/core/takvim'
 import { tbk347KapsamindaMi } from '@/core/tipler'
 import { dateToTarih, gunEkle, tarih as t } from '@/core/tarih'
 
@@ -60,6 +60,34 @@ describe('artış ve tespit tarihleri', () => {
   })
   it('tespit tarihleri her 5 yılda', () => {
     expect(tespitTarihleri(t('2014-06-01'), t('2026-12-31'))).toEqual(['2019-06-01', '2024-06-01'])
+  })
+})
+
+describe('artisYururlugu (I2: artış hesabı, onayı ve H5 için yürürlük)', () => {
+  const bugun = t('2026-10-15')
+  const s = (durum: 'TASLAK' | 'AKTIF' | 'UZADI' | 'FESHEDILDI' | 'SONA_ERDI', bitis: string | null, fesihTarihi: string | null = null) =>
+    artisYururlugu({ durum, bitis: bitis === null ? null : t(bitis), fesihTarihi: fesihTarihi === null ? null : t(fesihTarihi) }, bugun)
+  it('AKTIF ve UZADI yürürlüktedir; etkin bitiş sözleşme bitişidir', () => {
+    expect(s('AKTIF', '2026-12-31')).toEqual({ sonaErmekte: false, bitisEtkin: '2026-12-31' })
+    expect(s('UZADI', null)).toEqual({ sonaErmekte: false, bitisEtkin: null })
+    // Bitişi geçmiş TBK 347 sözleşmesi uzayana kadar yürürlükte sayılır (otomatik uzama).
+    expect(s('AKTIF', '2026-01-31')).toEqual({ sonaErmekte: false, bitisEtkin: '2026-01-31' })
+  })
+  it('FESHEDILDI fesih tarihine kadar (dahil) yürürlüktedir; etkin bitiş fesih tarihidir', () => {
+    expect(s('FESHEDILDI', '2027-12-31', '2026-10-15')).toEqual({ sonaErmekte: true, bitisEtkin: '2026-10-15' })
+    expect(s('FESHEDILDI', '2027-12-31', '2027-03-31')).toEqual({ sonaErmekte: true, bitisEtkin: '2027-03-31' })
+    expect(s('FESHEDILDI', '2027-12-31', '2026-10-14')).toBeNull()
+    expect(s('FESHEDILDI', '2027-12-31', null)).toBeNull()
+  })
+  it('SONA_ERDI bitişine kadar (dahil) yürürlüktedir', () => {
+    expect(s('SONA_ERDI', '2026-10-15')).toEqual({ sonaErmekte: true, bitisEtkin: '2026-10-15' })
+    expect(s('SONA_ERDI', '2026-10-14')).toBeNull()
+    expect(s('SONA_ERDI', null)).toBeNull()
+    // Fesih tarihi yalnızca FESHEDILDI durumunda okunur.
+    expect(s('SONA_ERDI', '2026-10-14', '2027-01-01')).toBeNull()
+  })
+  it('taslak yürürlükte değildir', () => {
+    expect(s('TASLAK', '2027-12-31')).toBeNull()
   })
 })
 

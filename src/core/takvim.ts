@@ -1,5 +1,5 @@
 import { ayEkle, ayinGunSayisi, birlestir, gunEkle, karsilastir, parcala, type Tarih } from './tarih'
-import type { OdemePeriyodu, OdemeZamani, VadeKurali } from './tipler'
+import type { OdemePeriyodu, OdemeZamani, SozlesmeDurumu, VadeKurali } from './tipler'
 
 export interface Donem { sira: number; baslangic: Tarih; bitis: Tarih; tam: boolean }
 
@@ -45,6 +45,21 @@ export function artisTarihleri(p: { ilkKiraBaslangici: Tarih; periyotAy: number;
     sonuc.push(d)
   }
   return sonuc
+}
+
+/** `sonaErmekte`: ileri tarihli fesih ya da sona erme; `bitisEtkin`: fesih tarihi, yoksa sözleşme bitişi (belirsiz sürelide null). */
+export interface ArtisYururlugu { sonaErmekte: boolean; bitisEtkin: Tarih | null }
+
+/**
+ * Artış hesabı, onayı ve H5 için yürürlük (spec §6.3, §9): AKTIF/UZADI sözleşme; ya da etkin bitişi bugün veya sonrası olan, sona
+ * ermekte olan sözleşme (FESHEDILDI → fesih tarihi, SONA_ERDI → bitiş). Sona ermekte olan sözleşmede yalnızca etkin bitişe kadar
+ * (dahil) başlayan artışlar hesaplanır ve hatırlatılır. Yürürlükte değilse null.
+ */
+export function artisYururlugu(s: { durum: SozlesmeDurumu; bitis: Tarih | null; fesihTarihi: Tarih | null }, bugun: Tarih): ArtisYururlugu | null {
+  if (s.durum === 'AKTIF' || s.durum === 'UZADI') return { sonaErmekte: false, bitisEtkin: s.bitis }
+  const son = s.durum === 'FESHEDILDI' ? s.fesihTarihi : s.durum === 'SONA_ERDI' ? s.bitis : null
+  if (son === null || karsilastir(son, bugun) < 0) return null
+  return { sonaErmekte: true, bitisEtkin: son }
 }
 
 export function tespitTarihleri(ilkKiraBaslangici: Tarih, sonTarih: Tarih): Tarih[] {

@@ -66,6 +66,13 @@ export interface SozlesmeOzeti {
   artisKurali: ArtisKurali
   artisPeriyoduAy: number
   eksikler: EksikVeri[]
+  /**
+   * İleri tarihli fesih ya da sona erme (FESHEDILDI/SONA_ERDI, etkin bitiş bugün veya sonra; bkz. `artisYururlugu`). Böyle sözleşmede
+   * yalnızca etkin bitişe kadar başlayan artışlar (H5) ve eksik veri (H12) hatırlatılır; bitiş, uzama ve tespit kuralları susar.
+   */
+  sonaErmekte: boolean
+  /** Fesih tarihi, yoksa sözleşme bitişi (belirsiz sürelide null). */
+  bitisEtkin: Tarih | null
 }
 export interface TaksitOzeti {
   id: string
@@ -178,8 +185,9 @@ function sozlesmeKurallari(v: HatirlatmaVerisi, s: SozlesmeOzeti, ekle: Ekle): v
 
   if (s.artisKurali !== 'YOK') {
     const ufuk = gunEkle(v.bugun, a.artisOnceGun)
-    // Arsa kirası bitişte sona erer. TBK 347 kapsamı ve açık uçlu sözleşmelerde artış ufka kadar aranır.
-    const son = s.bitis === null || tbk ? ufuk : enKucukTarih(s.bitis, ufuk)
+    // Arsa kirası bitişte sona erer. TBK 347 kapsamı ve açık uçlu sözleşmelerde artış ufka kadar aranır; sona ermekte olan sözleşmede
+    // etkin bitişe kadar (uzamayacaktır).
+    const son = s.sonaErmekte ? enKucukTarih(s.bitisEtkin ?? ufuk, ufuk) : s.bitis === null || tbk ? ufuk : enKucukTarih(s.bitis, ufuk)
     for (const d of artisTarihleri({ ilkKiraBaslangici: s.ilkKiraBaslangici, periyotAy: s.artisPeriyoduAy, sonTarih: son })) {
       if (karsilastir(d, s.sonKiraDonemiBaslangici) <= 0) continue
       const kayit = v.artislar.find((x) => x.sozlesmeId === s.id && x.donemBaslangic === d)
@@ -195,6 +203,16 @@ function sozlesmeKurallari(v: HatirlatmaVerisi, s: SozlesmeOzeti, ekle: Ekle): v
       })
     }
   }
+
+  if (!s.sonaErmekte) bitisVeUzamaKurallari(v, s, ekle)
+  eksikVeriKurallari(v, s, ekle)
+}
+
+/** H6, H6_SON_GUN, H6_ARSA, H7, H8: yalnızca uzayabilecek (sona ermekte olmayan) sözleşmeler için. */
+function bitisVeUzamaKurallari(v: HatirlatmaVerisi, s: SozlesmeOzeti, ekle: Ekle): void {
+  const a = v.ayarlar
+  const tbk = tbk347KapsamindaMi(s.tasinmazTuru)
+  const ortak = { iliskiliTur: 'sozlesme' as const, iliskiliId: s.id, sozlesmeId: s.id }
 
   if (s.bitis !== null) {
     const kalan = gunFarki(v.bugun, s.bitis)
@@ -255,7 +273,10 @@ function sozlesmeKurallari(v: HatirlatmaVerisi, s: SozlesmeOzeti, ekle: Ekle): v
       }
     }
   }
+}
 
+function eksikVeriKurallari(v: HatirlatmaVerisi, s: SozlesmeOzeti, ekle: Ekle): void {
+  const ortak = { iliskiliTur: 'sozlesme' as const, iliskiliId: s.id, sozlesmeId: s.id }
   for (const e of s.eksikler) {
     ekle({
       ...ortak, anahtar: `H12:sozlesme:${s.id}:${e}`, kural: 'H12',
