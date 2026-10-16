@@ -37,7 +37,7 @@ const config = [
     },
   },
   {
-    files: ['src/core/hesap/**/*.ts', 'src/core/para.ts', 'src/core/hisse.ts', 'src/core/endeks/**/*.ts'],
+    files: ['src/core/hesap/**/*.ts', 'src/core/paket/**/*.ts', 'src/core/rapor/**/*.ts', 'src/core/para.ts', 'src/core/hisse.ts', 'src/core/endeks/**/*.ts'],
     rules: {
       'no-restricted-globals': ['error',
         { name: 'Number', message: PARA_MESAJI },
