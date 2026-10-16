@@ -1,5 +1,5 @@
 # Tanıtım sayfası (site/) GitHub Pages'e yayımlanır. Uygulamanın kendisi sunucu ve veritabanı gerektirir; Pages'te çalışmaz.
-# Depo ayarı: Settings → Pages → Build and deployment → Source: "GitHub Actions".
+# Depo ayarı: Settings → Pages → Build and deployment → Source: "GitHub Actions" (branch modu bu yayını ezer).
 name: GitHub Pages
 
 on:
