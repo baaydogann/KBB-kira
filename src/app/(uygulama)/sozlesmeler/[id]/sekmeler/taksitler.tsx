@@ -20,7 +20,10 @@ export function TaksitlerSekmesi({ s }: { s: SozlesmeDetayi }) {
           return (
             <tr key={x.id} className={x.durum === 'IPTAL' ? 'text-slate-400 line-through' : ''}>
               <Td><TarihMetni deger={tarihDbOpt(x.donemBaslangic)} /> – <TarihMetni deger={tarihDbOpt(x.donemBitis)} /></Td>
-              <Td><TarihMetni deger={tarihDbOpt(x.vadeTarihi)} /></Td>
+              <Td>
+                <TarihMetni deger={tarihDbOpt(x.vadeTarihi)} />
+                {s.tatileDenkTaksitIdleri.includes(x.id) ? <span className="ml-1"><Rozet ton="sari">tatile denk geliyor</Rozet></span> : null}
+              </Td>
               <Td>{x.tur}{g.artisBekleniyor ? <span className="ml-1"><Rozet ton="sari">artış bekleniyor (tahmini)</Rozet></span> : null}</Td>
               <Td className="text-right"><ParaMetni deger={x.tutar.toFixed(2)} /></Td>
               <Td><Rozet ton={TON[x.durum] ?? 'gri'}>{x.durum}</Rozet></Td>

@@ -1,6 +1,6 @@
 import { maskele } from '@/core/dogrulama'
 import { formatTL, para } from '@/core/para'
-import { bugunIstanbul, gunFarki, icindeMi, type Tarih } from '@/core/tarih'
+import { bugunIstanbul, gunFarki, icindeMi, isGunuMu, type Tarih } from '@/core/tarih'
 import { uyumUyarilari, type UyumUyarisi } from '@/core/uyum'
 import type { Prisma, SozlesmeDurumu } from '@/generated/prisma'
 import { belgeListesi } from '../belge/servis'
@@ -9,6 +9,7 @@ import { tarihDb, tarihDbOpt } from '../donustur'
 import { BulunamadiHatasi } from '../hata'
 import { kisiGorunenAd } from '../kisi/servis'
 import { parametreOpsiyonel } from '../parametre/servis'
+import { tatilKumesi } from '../tatil/servis'
 
 function guncelBedel(kd: { baslangic: Date; bitis: Date | null; bedelTutari: { toFixed(n: number): string } }[], bugun: Tarih, varsayilan: { toFixed(n: number): string }): string {
   const k = kd.find((x) => icindeMi(bugun, { baslangic: tarihDb(x.baslangic), bitis: tarihDbOpt(x.bitis) })) ?? kd.at(-1)
@@ -47,10 +48,12 @@ export async function sozlesmeDetayi(id: number, bugun: Tarih = bugunIstanbul())
     },
   })
   if (!s) throw new BulunamadiHatasi('Sözleşme bulunamadı.')
-  const [belgeler, olaylar, tasarruf] = await Promise.all([
+  const vadeler = s.taksitler.map((x) => tarihDb(x.vadeTarihi)).sort()
+  const [belgeler, olaylar, tasarruf, tatiller] = await Promise.all([
     belgeListesi('sozlesme', id),
     prisma.olayGunlugu.findMany({ where: { varlik: 'sozlesme', varlikId: String(id) }, orderBy: [{ zaman: 'desc' }, { id: 'desc' }], take: 200 }),
     parametreOpsiyonel('TASARRUF_GENELGESI_2024_7', bugun),
+    vadeler.length === 0 ? new Set<string>() : tatilKumesi(vadeler[0]!, vadeler.at(-1)!),
   ])
   const uyarilar: UyumUyarisi[] = uyumUyarilari({
     odemePeriyoduAy: s.odemePeriyoduAy, odemeZamani: s.odemeZamani, artisPeriyoduAy: s.artisPeriyoduAy, artisKurali: s.artisKurali,
@@ -65,6 +68,8 @@ export async function sozlesmeDetayi(id: number, bugun: Tarih = bugunIstanbul())
       ...m, kisiAdi: kisiGorunenAd(kisi), vekilAdi: vekil ? kisiGorunenAd(vekil) : null, ibanMaskeli: iban ? maskele(iban.iban) : null,
     })),
     belgeler, olaylar, uyarilar,
+    // Vadesi iş günü olmayan taksitler: sözleşmesel vade kaydırılmaz, "tatile denk geliyor" etiketiyle gösterilir (spec §7.2).
+    tatileDenkTaksitIdleri: s.taksitler.filter((x) => !isGunuMu(tarihDb(x.vadeTarihi), tatiller)).map((x) => x.id),
   }
 }
 

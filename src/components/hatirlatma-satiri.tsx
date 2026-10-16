@@ -25,14 +25,17 @@ function hedefAdresi(h: Pick<PanoSatiri, 'sozlesmeId' | 'kural' | 'iliskiliTur'>
 const TAMAMLA_ALANLARI: EylemAlani[] = [{ ad: 'not', etiket: 'Not', yerTutucu: 'Not (isteğe bağlı)' }]
 const ERTELE_ALANLARI: EylemAlani[] = [{ ad: 'tarih', etiket: 'Erteleme tarihi', tur: 'date', zorunlu: true }]
 
-export function HatirlatmaSatiri({ h }: { h: Pick<PanoSatiri, 'id' | 'baslik' | 'aciklama' | 'hedef' | 'oncelik' | 'sozlesmeId' | 'kural' | 'iliskiliTur'> }) {
+export function HatirlatmaSatiri({ h }: { h: Pick<PanoSatiri, 'id' | 'baslik' | 'aciklama' | 'hedef' | 'oncelik' | 'sozlesmeId' | 'kural' | 'iliskiliTur'> & { tatileDenk?: boolean } }) {
   const hedefUrl = hedefAdresi(h)
   return (
     <li className="flex flex-wrap items-start gap-3 border-b border-slate-100 px-3 py-2 last:border-0">
       <Rozet ton={TON[h.oncelik]}>{h.oncelik}</Rozet>
       <div className="min-w-64 flex-1">
         <p className="font-medium">{hedefUrl ? <Link href={hedefUrl} className="hover:underline">{h.baslik}</Link> : h.baslik}</p>
-        <p className="text-xs text-slate-600">{h.aciklama} — son tarih {formatTarih(h.hedef)}</p>
+        <p className="text-xs text-slate-600">
+          {h.aciklama} — son tarih {formatTarih(h.hedef)}
+          {h.tatileDenk ? <span className="ml-1"><Rozet ton="sari">tatile denk geliyor</Rozet></span> : null}
+        </p>
       </div>
       <details className="text-xs">
         <summary className="cursor-pointer text-marka">İşlem</summary>

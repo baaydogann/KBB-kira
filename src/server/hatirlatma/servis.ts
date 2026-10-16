@@ -2,7 +2,7 @@ import { hisseToplamiBirMi } from '@/core/hisse'
 import {
   hatirlatmalariUret, OTOMATIK_KURALLAR, type EksikVeri, type HatirlatmaAdayi, type HatirlatmaVerisi, type Oncelik,
 } from '@/core/hatirlatma'
-import { bugunIstanbul, gunEkle, icindeMi, karsilastir, type Ay, type Tarih } from '@/core/tarih'
+import { bugunIstanbul, gunEkle, icindeMi, isGunuMu, karsilastir, type Ay, type Tarih } from '@/core/tarih'
 import type { IslemBaglami } from '../baglam'
 import { prisma, type Tx } from '../db'
 import { denetimKaydi } from '../denetim'
@@ -197,6 +197,8 @@ export interface PanoSatiri {
   ertelenenTarih: Tarih | null
   oncelik: Oncelik
   kararGerekli: boolean
+  /** Ödeme satırının (H1) vadesi iş günü değil: sözleşmesel vade kaydırılmaz, "tatile denk geliyor" etiketiyle gösterilir (spec §7.2). */
+  tatileDenk: boolean
 }
 
 export interface PanoVerisi {
@@ -211,10 +213,14 @@ export async function panoVerisi(bugun: Tarih = bugunIstanbul()): Promise<PanoVe
   const kayitlar = await prisma.hatirlatma.findMany({
     where: { gorunurTarih: { lte: gun }, OR: [{ durum: 'ACIK' }, { durum: 'ERTELENDI', ertelenenTarih: { lte: gun } }] },
   })
+  // Tatiller yalnızca ödeme satırlarının vade aralığı için okunur.
+  const vadeler = kayitlar.filter((k) => k.kural === 'H1').map((k) => tarihDb(k.hedefTarih)).sort()
+  const tatiller = vadeler.length === 0 ? new Set<string>() : await tatilKumesi(vadeler[0]!, vadeler.at(-1)!)
   const satirlar: PanoSatiri[] = kayitlar
     .map((k) => ({
       id: k.id, kural: k.kural, iliskiliTur: k.iliskiliTur, sozlesmeId: k.sozlesmeId, baslik: k.baslik, aciklama: k.aciklama,
       hedef: tarihDb(k.hedefTarih), ertelenenTarih: tarihDbOpt(k.ertelenenTarih), oncelik: k.oncelik, kararGerekli: k.kararGerekli,
+      tatileDenk: k.kural === 'H1' && !isGunuMu(tarihDb(k.hedefTarih), tatiller),
     }))
     .sort((a, b) => SIRA[a.oncelik] - SIRA[b.oncelik] || karsilastir(a.hedef, b.hedef) || a.id - b.id)
   const hafta = gunEkle(bugun, 7)

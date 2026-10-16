@@ -270,6 +270,23 @@ describe('pano', () => {
     expect((await panoVerisi(t('2026-10-20'))).listeler.tumu.some((x) => x.id === h6.id)).toBe(true)
   })
 
+  it('I6: vadesi iş günü olmayan ödeme satırı "tatile denk geliyor" bayrağı taşır (2026-10-29 resmi tatil, hafta sonu); diğerleri taşımaz', async () => {
+    const id = await sozlesme()
+    const h1 = (taksitId: number, hedef: string, kural = 'H1') => prisma.hatirlatma.create({
+      data: {
+        anahtar: `${kural}:taksit:${taksitId}:${hedef}`, kural, iliskiliTur: 'taksit', iliskiliId: String(taksitId), sozlesmeId: id,
+        baslik: 'Kira ödemesi', aciklama: 'açıklama', hedefTarih: new Date(hedef), gorunurTarih: new Date('2026-10-20'), oncelik: 'NORMAL',
+      },
+    })
+    const tatil = await h1(1, '2026-10-29')
+    const pazar = await h1(2, '2026-11-01')
+    const isGunu = await h1(3, '2026-10-30')
+    const odemeEmri = await h1(4, '2026-10-29', 'H2')
+    const satirlar = (await panoVerisi(t('2026-10-25'))).listeler.tumu
+    const bayrak = (kayitId: number) => satirlar.find((x) => x.id === kayitId)?.tatileDenk
+    expect([bayrak(tatil.id), bayrak(pazar.id), bayrak(isGunu.id), bayrak(odemeEmri.id)]).toEqual([true, true, false, false])
+  })
+
   it('satırlar düz değerlerdir (Date/Decimal yok); öncelik sırası KRITIK, YUKSEK, NORMAL', async () => {
     await sozlesme()
     await uret()

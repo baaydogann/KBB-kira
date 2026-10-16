@@ -38,6 +38,15 @@ describe('sözleşme sorguları', () => {
     expect(d.olaylar.some((o) => o.eylem === 'AKTIFLESTIR')).toBe(true)
   })
 
+  it('I6: detay, vadesi iş günü olmayan (tatil, hafta sonu) taksitleri işaretler', async () => {
+    const id = await sozlesmeTaslakKaydet(girdi(h, { vadeKurali: 'AYIN_GUNU', vadeParametresi: 29 }), TEST_BAGLAMI)
+    await sozlesmeAktiflestir(id, 0, TEST_BAGLAMI, t('2026-01-01'))
+    const d = await sozlesmeDetayi(id, t('2026-10-15'))
+    const vade = (ay: string) => d.taksitler.find((x) => x.vadeTarihi.toISOString().startsWith(ay))!
+    // 2026-10-29 Cumhuriyet Bayramı, 2026-11-29 pazar, 2026-12-29 salı.
+    expect([vade('2026-10-29'), vade('2026-11-29'), vade('2026-12-29')].map((x) => d.tatileDenkTaksitIdleri.includes(x.id))).toEqual([true, true, false])
+  })
+
   it('detay malik satırlarında kişi/IBAN/vekil satırı yoktur; IBAN yalnızca maskeli, kimlik numarası hiç görünmez (KVKK)', async () => {
     const id = await sozlesmeTaslakKaydet(girdi(h), TEST_BAGLAMI)
     const d = await sozlesmeDetayi(id, t('2026-10-15'))
