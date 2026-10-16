@@ -180,6 +180,32 @@ enum IsDurumu {
   ATLANDI
 }
 
+enum PaketDurumu {
+  TASLAK
+  HESAPLANDI
+  KESINLESTI
+  ODEME_EMRINDE
+  ODENDI
+  IPTAL
+}
+
+enum HacizDurumu {
+  AKTIF
+  KAPANDI
+}
+
+enum DamgaOlayi {
+  ILK
+  YAZILI_ARTIS
+  YAZILI_UZATMA
+}
+
+enum KesintiTuru {
+  DAMGA
+  HACIZ
+  KESINTI_22A
+}
+
 model Kullanici {
   id                Int       @id @default(autoincrement())
   kullaniciAdi      String    @unique @map("kullanici_adi")
@@ -228,6 +254,7 @@ model Birim {
   guncellemeZamani        DateTime   @updatedAt @map("guncelleme_zamani") @db.Timestamptz(3)
   tasinmazlar             Tasinmaz[]
   sozlesmeler             Sozlesme[]
+  paketler                OdemePaketi[]
 
   @@map("birim")
 }
@@ -277,6 +304,12 @@ model Kisi {
   ibanlar          Iban[]
   malikKayitlari   SozlesmeMalik[] @relation("MalikKisi")
   vekilKayitlari   SozlesmeMalik[] @relation("VekilKisi")
+  borcSorgulari    BorcSorgu[]
+  hacizler         Haciz[]
+  dagilimlar       TaksitDagilim[] @relation("DagilimKisi")
+  odemeDagilimlari TaksitDagilim[] @relation("DagilimOdemeKisi")
+  damgaPaylari     DamgaPayi[]
+  faturalar        PaketFatura[]
 
   @@map("kisi")
 }
@@ -291,6 +324,7 @@ model Iban {
   olusturmaZamani  DateTime        @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
   guncellemeZamani DateTime        @updatedAt @map("guncelleme_zamani") @db.Timestamptz(3)
   malikKayitlari   SozlesmeMalik[]
+  dagilimlar       TaksitDagilim[]
 
   @@unique([kisiId, iban])
   @@map("iban")
@@ -344,6 +378,7 @@ model Sozlesme {
   kiraDonemleri          KiraDonemi[]
   artislar               ArtisHesabi[]
   taksitler              Taksit[]
+  damgaKayitlari         DamgaKaydi[]
 
   @@index([durum])
   @@map("sozlesme")
@@ -365,6 +400,7 @@ model SozlesmeMalik {
   gecerlilikBitis     DateTime? @map("gecerlilik_bitis") @db.Date
   olusturmaZamani     DateTime  @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
   guncellemeZamani    DateTime  @updatedAt @map("guncelleme_zamani") @db.Timestamptz(3)
+  dagilimlar          TaksitDagilim[]
 
   @@index([sozlesmeId])
   @@map("sozlesme_malik")
@@ -439,9 +475,15 @@ model Taksit {
   /// FARK taksitini doğuran kira dönemi (artış, tespit, anlaşma ya da düzeltme).
   kiraDonemiId     Int?         @map("kira_donemi_id")
   kiraDonemi       KiraDonemi?  @relation(fields: [kiraDonemiId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  /// Paket dışında (sistem dışında) ödendi olarak işaretlendi; yalnız ODENDI satırda doğru olabilir.
+  sistemDisiOdeme  Boolean      @default(false) @map("sistem_disi_odeme")
+  odemeNotu        String?      @map("odeme_notu")
   version          Int          @default(0)
   olusturmaZamani  DateTime     @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
   guncellemeZamani DateTime     @updatedAt @map("guncelleme_zamani") @db.Timestamptz(3)
+  paketKayitlari   PaketTaksit[]
+  dagilimlar       TaksitDagilim[]
+  faturalar        PaketFatura[]
 
   @@index([sozlesmeId, donemBaslangic])
   @@index([durum, vadeTarihi])
@@ -563,4 +605,213 @@ model OlayGunlugu {
   @@index([varlik, varlikId])
   @@index([zaman])
   @@map("olay_gunlugu")
+}
+
+model OdemePaketi {
+  id                      Int              @id @default(autoincrement())
+  birimId                 Int              @map("birim_id")
+  birim                   Birim            @relation(fields: [birimId], references: [id])
+  ad                      String
+  vadeBaslangic           DateTime         @map("vade_baslangic") @db.Date
+  vadeBitis               DateTime         @map("vade_bitis") @db.Date
+  durum                   PaketDurumu      @default(TASLAK)
+  kalanOdenek             Decimal?         @map("kalan_odenek") @db.Decimal(18, 2)
+  /// Tahakkuk tarihi: paketin hesaplandığı gün; oranlar bu tarihte yürürlükteki parametreden alınır.
+  hesapTarihi             DateTime?        @map("hesap_tarihi") @db.Date
+  onKontrol               Json?            @map("on_kontrol")
+  hesapParmakIzi          Json?            @map("hesap_parmak_izi")
+  muhasebeOdemeEmriNo     String?          @map("muhasebe_odeme_emri_no")
+  muhasebeOdemeEmriTarihi DateTime?        @map("muhasebe_odeme_emri_tarihi") @db.Date
+  odemeTarihi             DateTime?        @map("odeme_tarihi") @db.Date
+  olusturanId             Int?             @map("olusturan_id")
+  kesinlestirenId         Int?             @map("kesinlestiren_id")
+  kesinlesmeZamani        DateTime?        @map("kesinlesme_zamani") @db.Timestamptz(3)
+  iptalNedeni             String?          @map("iptal_nedeni")
+  version                 Int              @default(0)
+  olusturmaZamani         DateTime         @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
+  guncellemeZamani        DateTime         @updatedAt @map("guncelleme_zamani") @db.Timestamptz(3)
+  taksitler               PaketTaksit[]
+  faturalar               PaketFatura[]
+  dagilimlar              TaksitDagilim[]
+  kesintiler              DagilimKesinti[]
+
+  @@index([durum])
+  @@index([birimId])
+  @@map("odeme_paketi")
+}
+
+model PaketTaksit {
+  id                     Int         @id @default(autoincrement())
+  paketId                Int         @map("paket_id")
+  paket                  OdemePaketi @relation(fields: [paketId], references: [id])
+  taksitId               Int         @map("taksit_id")
+  taksit                 Taksit      @relation(fields: [taksitId], references: [id])
+  aktif                  Boolean     @default(true)
+  bolunsun               Boolean     @default(false)
+  hesaplananTaksitSurumu Int?        @map("hesaplanan_taksit_surumu")
+  olusturmaZamani        DateTime    @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
+
+  @@unique([paketId, taksitId])
+  @@index([taksitId])
+  @@map("paket_taksit")
+}
+
+model PaketFatura {
+  id               Int         @id @default(autoincrement())
+  paketId          Int         @map("paket_id")
+  paket            OdemePaketi @relation(fields: [paketId], references: [id])
+  taksitId         Int         @map("taksit_id")
+  taksit           Taksit      @relation(fields: [taksitId], references: [id])
+  kisiId           Int         @map("kisi_id")
+  kisi             Kisi        @relation(fields: [kisiId], references: [id])
+  faturaNo         String      @map("fatura_no")
+  faturaTarihi     DateTime    @map("fatura_tarihi") @db.Date
+  olusturmaZamani  DateTime    @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
+  guncellemeZamani DateTime    @updatedAt @map("guncelleme_zamani") @db.Timestamptz(3)
+
+  @@unique([paketId, taksitId, kisiId])
+  @@map("paket_fatura")
+}
+
+model TaksitDagilim {
+  id              Int              @id @default(autoincrement())
+  paketId         Int              @map("paket_id")
+  paket           OdemePaketi      @relation(fields: [paketId], references: [id])
+  taksitId        Int              @map("taksit_id")
+  taksit          Taksit           @relation(fields: [taksitId], references: [id])
+  sozlesmeMalikId Int              @map("sozlesme_malik_id")
+  sozlesmeMalik   SozlesmeMalik    @relation(fields: [sozlesmeMalikId], references: [id])
+  kisiId          Int              @map("kisi_id")
+  kisi            Kisi             @relation("DagilimKisi", fields: [kisiId], references: [id])
+  odemeKisiId     Int              @map("odeme_kisi_id")
+  odemeKisi       Kisi             @relation("DagilimOdemeKisi", fields: [odemeKisiId], references: [id])
+  ibanId          Int?             @map("iban_id")
+  iban            Iban?            @relation(fields: [ibanId], references: [id])
+  sira            Int
+  parca           Int              @default(0)
+  parcaBaslangic  DateTime         @map("parca_baslangic") @db.Date
+  parcaBitis      DateTime         @map("parca_bitis") @db.Date
+  pay             Int
+  payda           Int
+  brut            Decimal          @db.Decimal(18, 2)
+  kdv             Decimal          @db.Decimal(18, 2)
+  stopaj          Decimal          @db.Decimal(18, 2)
+  kdvOrani        Decimal          @map("kdv_orani") @db.Decimal(9, 4)
+  stopajOrani     Decimal          @map("stopaj_orani") @db.Decimal(9, 4)
+  damgaKesintisi  Decimal          @default(0) @map("damga_kesintisi") @db.Decimal(18, 2)
+  hacizKesintisi  Decimal          @default(0) @map("haciz_kesintisi") @db.Decimal(18, 2)
+  kesinti22a      Decimal          @default(0) @map("kesinti_22a") @db.Decimal(18, 2)
+  net             Decimal          @db.Decimal(18, 2)
+  hesapGoruntusu  Json             @map("hesap_goruntusu")
+  olusturmaZamani DateTime         @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
+  kesintiler      DagilimKesinti[]
+
+  @@index([paketId])
+  @@index([taksitId])
+  @@index([kisiId])
+  @@map("taksit_dagilim")
+}
+
+model DagilimKesinti {
+  id          Int           @id @default(autoincrement())
+  paketId     Int           @map("paket_id")
+  paket       OdemePaketi   @relation(fields: [paketId], references: [id])
+  dagilimId   Int           @map("dagilim_id")
+  dagilim     TaksitDagilim @relation(fields: [dagilimId], references: [id], onDelete: Cascade)
+  tur         KesintiTuru
+  tutar       Decimal       @db.Decimal(18, 2)
+  hacizId     Int?          @map("haciz_id")
+  haciz       Haciz?        @relation(fields: [hacizId], references: [id], onDelete: Restrict)
+  borcSorguId Int?          @map("borc_sorgu_id")
+  borcSorgu   BorcSorgu?    @relation(fields: [borcSorguId], references: [id], onDelete: Restrict)
+  damgaPayiId Int?          @map("damga_payi_id")
+  damgaPayi   DamgaPayi?    @relation(fields: [damgaPayiId], references: [id], onDelete: Restrict)
+
+  @@index([paketId])
+  @@index([dagilimId])
+  @@index([hacizId])
+  @@index([borcSorguId])
+  @@index([damgaPayiId])
+  @@map("dagilim_kesinti")
+}
+
+model BorcSorgu {
+  id              Int              @id @default(autoincrement())
+  kisiId          Int              @map("kisi_id")
+  kisi            Kisi             @relation(fields: [kisiId], references: [id])
+  sorguTarihi     DateTime         @map("sorgu_tarihi") @db.Date
+  gecerlilikBitis DateTime         @map("gecerlilik_bitis") @db.Date
+  borcVar         Boolean          @map("borc_var")
+  borcTutari      Decimal          @default(0) @map("borc_tutari") @db.Decimal(18, 2)
+  vergiDairesi    String?          @map("vergi_dairesi")
+  belgeNo         String?          @map("belge_no")
+  belgeId         Int?             @map("belge_id")
+  olusturanId     Int?             @map("olusturan_id")
+  olusturmaZamani DateTime         @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
+  kesintiler      DagilimKesinti[]
+
+  @@index([kisiId, gecerlilikBitis])
+  @@map("borc_sorgu")
+}
+
+model Haciz {
+  id               Int              @id @default(autoincrement())
+  kisiId           Int              @map("kisi_id")
+  kisi             Kisi             @relation(fields: [kisiId], references: [id])
+  alacakli         String
+  dosyaNo          String           @map("dosya_no")
+  tebligTarihi     DateTime         @map("teblig_tarihi") @db.Date
+  toplamTutar      Decimal          @map("toplam_tutar") @db.Decimal(18, 2)
+  kalanTutar       Decimal          @map("kalan_tutar") @db.Decimal(18, 2)
+  durum            HacizDurumu      @default(AKTIF)
+  kapanisNedeni    String?          @map("kapanis_nedeni")
+  version          Int              @default(0)
+  olusturmaZamani  DateTime         @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
+  guncellemeZamani DateTime         @updatedAt @map("guncelleme_zamani") @db.Timestamptz(3)
+  kesintiler       DagilimKesinti[]
+
+  @@index([kisiId, durum])
+  @@map("haciz")
+}
+
+model DamgaKaydi {
+  id               Int         @id @default(autoincrement())
+  sozlesmeId       Int         @map("sozlesme_id")
+  sozlesme         Sozlesme    @relation(fields: [sozlesmeId], references: [id])
+  olay             DamgaOlayi
+  olayTarihi       DateTime    @map("olay_tarihi") @db.Date
+  matrah           Decimal     @db.Decimal(18, 2)
+  oranBinde        Decimal     @map("oran_binde") @db.Decimal(9, 4)
+  azami            Decimal     @db.Decimal(18, 2)
+  tutar            Decimal     @db.Decimal(18, 2)
+  tahsil           DamgaTahsil
+  makbuzBelgeId    Int?        @map("makbuz_belge_id")
+  gerekce          Json
+  iptal            Boolean     @default(false)
+  iptalNedeni      String?     @map("iptal_nedeni")
+  olusturanId      Int?        @map("olusturan_id")
+  version          Int         @default(0)
+  olusturmaZamani  DateTime    @default(now()) @map("olusturma_zamani") @db.Timestamptz(3)
+  guncellemeZamani DateTime    @updatedAt @map("guncelleme_zamani") @db.Timestamptz(3)
+  paylar           DamgaPayi[]
+
+  @@index([sozlesmeId])
+  @@map("damga_kaydi")
+}
+
+model DamgaPayi {
+  id           Int              @id @default(autoincrement())
+  damgaKaydiId Int              @map("damga_kaydi_id")
+  damgaKaydi   DamgaKaydi       @relation(fields: [damgaKaydiId], references: [id], onDelete: Cascade)
+  kisiId       Int              @map("kisi_id")
+  kisi         Kisi             @relation(fields: [kisiId], references: [id])
+  pay          Int
+  payda        Int
+  tutar        Decimal          @db.Decimal(18, 2)
+  kalan        Decimal          @db.Decimal(18, 2)
+  version      Int              @default(0)
+  kesintiler   DagilimKesinti[]
+
+  @@unique([damgaKaydiId, kisiId])
+  @@map("damga_payi")
 }
