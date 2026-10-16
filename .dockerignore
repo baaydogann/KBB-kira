@@ -6,8 +6,8 @@ reports
 .stryker-tmp
 test-results
 playwright-report
-.env
-.env.local
+.env*
+!.env.example
 # Brief'e ek (Task 27): üretilen/yerel çıktılar imaja girmez; Windows'ta üretilmiş Prisma istemcisi Linux imajındakini bozmasın.
 src/generated
 .superpowers

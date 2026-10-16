@@ -1,3 +1,7 @@
+# Proje adı sabittir: docker-compose.dev.yml'in varsayılan adı (dizin adı: kbb-kira) ile çakışıp geliştirme postgres'ini yeniden oluşturmasın.
+# Konteyner ve volume adları buna bağlıdır: kbb-kira-prod-web-1, kbb-kira-prod_pgdata, kbb-kira-prod_belgeler.
+name: kbb-kira-prod
+
 services:
   postgres:
     image: postgres:17

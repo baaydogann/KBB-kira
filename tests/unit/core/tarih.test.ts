@@ -199,11 +199,13 @@ describe('mutasyon kapısı: bugunIstanbul sunucu saat diliminden bağımsızdı
     vi.resetModules()
   })
 
-  it('süreç saat dilimi UTC iken bile İstanbul gününü verir', async () => {
-    process.env.TZ = 'UTC'
+  // Birim testleri vitest.config.ts ile TZ=UTC'de koşar; burada süreç dilimi UTC-10'a alınır ki İstanbul'a sabitleme
+  // hem UTC'ye hem başka bir dilime karşı sınansın (modül sabit biçimleyiciyi içe aktarma anında kurar).
+  it('süreç saat dilimi İstanbul dışında (UTC-10) iken bile İstanbul gününü verir', async () => {
+    process.env.TZ = 'Pacific/Honolulu'
     vi.resetModules()
     const taze = await import('@/core/tarih')
     expect(taze.bugunIstanbul(new Date('2026-10-15T22:30:00Z'))).toBe('2026-10-16')
-    expect(taze.bugunIstanbul(new Date('2026-10-15T20:30:00Z'))).toBe('2026-10-15')
+    expect(taze.bugunIstanbul(new Date('2026-10-15T09:30:00Z'))).toBe('2026-10-15')
   })
 })

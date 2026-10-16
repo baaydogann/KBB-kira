@@ -45,8 +45,9 @@ describe('maskele', () => {
 })
 
 describe('mutasyon kapısı: kimlik doğrulama kenarları', () => {
-  // Algoritmik (sentetik) geçerli kimlikler; hiçbiri gerçek bir kişiye ait değildir.
-  it.each(['35172694894', '57391486272', '46829137572'])('%s: tek ve çift hane toplamları ayrı ayrı etkilidir', (s) => {
+  // Depodaki sentetik üretim düzenindeki (tests/integration/ornekler.ts#tcknUret: 100_000_000 + n) değerler; kontrol haneleri algoritmayla hesaplandı.
+  // 5. hane (d[4]) 0/5 değil ve çift konumlu hane toplamı 5'in katı değil: tek/çift toplam işaretleri ve ağırlıkları ayrı ayrı sınanır.
+  it.each(['10001234540', '10002345184', '10001234786'])('%s: tek ve çift hane toplamları ayrı ayrı etkilidir', (s) => {
     expect(tcknGecerliMi(s)).toBe(true)
   })
   it('TCKN: tam 11 hane ister (geçerli kimliğin önüne/arkasına rakam eklenemez)', () => {
