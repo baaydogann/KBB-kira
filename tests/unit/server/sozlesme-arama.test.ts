@@ -1,6 +1,6 @@
 import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
-import { kimlikBenzeriMi, sozlesmeAramaHedefi } from '@/server/sozlesme/arama'
+import { kimlikBenzeriMi, sozlesmeAramaHedefi, tasinmazAramaHedefi } from '@/server/sozlesme/arama'
 
 describe('kimlikBenzeriMi', () => {
   it('boşluk, nokta ve tire atıldıktan sonra 10 ya da daha uzun rakam dizisi içeren girdiyi ve TR+2 rakamla başlayan IBAN\'ı kimlik benzeri sayar', () => {
@@ -47,6 +47,28 @@ describe('sozlesmeAramaHedefi', () => {
       expect(hedef).toBe('/sozlesmeler?kimlik=1')
       expect(hedef).not.toContain(q.slice(0, 6))
       expect(hedef).not.toContain(q.slice(-6))
+    }), { numRuns: 200 })
+  })
+})
+
+describe('tasinmazAramaHedefi (POST arama, kişi ve sözleşme listeleriyle aynı kural)', () => {
+  it('kimlik numarasına/IBAN benzeri girdiyi bildirim adresine yönlendirir; adreste değer yoktur', () => {
+    expect(tasinmazAramaHedefi('10000000146')).toBe('/tasinmazlar?kimlik=1')
+    expect(tasinmazAramaHedefi('Ahmet 100 000 001 46')).toBe('/tasinmazlar?kimlik=1')
+    expect(tasinmazAramaHedefi('tr33 0006 1005 1978 6457 8413 26')).toBe('/tasinmazlar?kimlik=1')
+  })
+
+  it('ad, adres, ilçe ve ada/parsel aramasını kodlanmış `q` ile döndürür; boş aramada listeye döner', () => {
+    expect(tasinmazAramaHedefi(' 123/45 ')).toBe('/tasinmazlar?q=123%2F45')
+    expect(tasinmazAramaHedefi('Meram hizmet binası')).toBe('/tasinmazlar?q=Meram%20hizmet%20binas%C4%B1')
+    expect(tasinmazAramaHedefi('   ')).toBe('/tasinmazlar')
+  })
+
+  it('özellik: 10/11 haneli numara ve IBAN benzeri girdi hedef adreste geçmez', () => {
+    const numara = fc.array(fc.integer({ min: 0, max: 9 }), { minLength: 10, maxLength: 11 }).map((r) => r.join(''))
+    const iban = fc.array(fc.integer({ min: 0, max: 9 }), { minLength: 2, maxLength: 24 }).map((r) => `TR${r.join('')}`)
+    fc.assert(fc.property(fc.oneof(numara, iban), (q) => {
+      expect(tasinmazAramaHedefi(q)).toBe('/tasinmazlar?kimlik=1')
     }), { numRuns: 200 })
   })
 })

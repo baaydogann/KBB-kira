@@ -4,9 +4,16 @@ import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { islemBaglami, kullaniciGerekli } from '@/server/auth/gerekli'
 import { IsKuraliHatasi } from '@/server/hata'
+import { tasinmazAramaHedefi } from '@/server/sozlesme/arama'
 import { tasinmazSemasi } from '@/server/tasinmaz/sema'
 import { tasinmazKaydet } from '@/server/tasinmaz/servis'
 import { formKimligi, formMetni, formSurum, hataDurumu, type FormDurumu } from '@/app/_lib/form'
+
+/** Liste arama kutusu (POST): kimlik numarası/IBAN benzeri girdi adres satırına yazılmaz (bkz. `tasinmazAramaHedefi`). */
+export async function tasinmazAraAction(f: FormData): Promise<void> {
+  await kullaniciGerekli()
+  redirect(tasinmazAramaHedefi(formMetni(f, 'q')))
+}
 
 export async function tasinmazKaydetAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
   const k = await kullaniciGerekli()

@@ -29,3 +29,13 @@ export function sozlesmeAramaHedefi(q: string, durum: string): string {
   if ((SOZLESME_DURUMLARI as readonly string[]).includes(durum)) parcalar.push(`durum=${durum}`)
   return parcalar.length ? `/sozlesmeler?${parcalar.join('&')}` : '/sozlesmeler'
 }
+
+/**
+ * Taşınmaz listesi araması (ad, adres, ilçe, ada/parsel): aynı KVKK kuralı. Kimlik numarasına benzeyen girdi bildirim adresine gider
+ * (değer adrese yazılmaz); aksi halde `?q=` ile.
+ */
+export function tasinmazAramaHedefi(q: string): string {
+  if (kimlikBenzeriMi(q)) return '/tasinmazlar?kimlik=1'
+  const ad = q.trim()
+  return ad ? `/tasinmazlar?q=${encodeURIComponent(ad)}` : '/tasinmazlar'
+}
