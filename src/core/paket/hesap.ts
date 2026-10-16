@@ -56,7 +56,10 @@ export interface PaketHesapGirdisi {
   idareVknVar: boolean
 }
 
-export interface MalikParcasi { baslangic: Tarih; bitis: Tarih; malikler: readonly MalikDonemi[] }
+export interface MalikParcasi<M = MalikDonemi> { baslangic: Tarih; bitis: Tarih; malikler: readonly M[] }
+
+/** Parçalara bölme için gereken en küçük malik kaydı (sunucu, oranları yüklemeden de kullanır). */
+export type MalikGecerliligi = Pick<MalikDonemi, 'sozlesmeMalikId' | 'gecerlilikBaslangic' | 'gecerlilikBitis'>
 
 export interface PaketSatiri extends DagilimSatiri {
   /** `${taksitId}:${parca}:${kisiId}` */
@@ -82,13 +85,19 @@ export interface PaketHesabi {
   onKontrol: OnKontrolSonucu
 }
 
-type ParcaGirdisi = Pick<PaketTaksitGirdisi, 'donemBaslangic' | 'donemBitis' | 'vade' | 'bolunsun' | 'malikDonemleri'>
+interface ParcaGirdisi<M extends MalikGecerliligi> {
+  donemBaslangic: Tarih
+  donemBitis: Tarih
+  vade: Tarih
+  bolunsun: boolean
+  malikDonemleri: readonly M[]
+}
 
-const gecerliler = (t: ParcaGirdisi, gun: Tarih): MalikDonemi[] =>
+const gecerliler = <M extends MalikGecerliligi>(t: ParcaGirdisi<M>, gun: Tarih): M[] =>
   t.malikDonemleri.filter((m) => icindeMi(gun, { baslangic: m.gecerlilikBaslangic, bitis: m.gecerlilikBitis }))
 
 /** `ilk`ten sonra ve `son`a kadar (dahil) malik kümesinin değişebileceği günler: geçerlilik başlangıçları ve bitişlerin ertesi günü. */
-function kesimGunleri(t: ParcaGirdisi, ilk: Tarih, son: Tarih): Tarih[] {
+function kesimGunleri(t: ParcaGirdisi<MalikGecerliligi>, ilk: Tarih, son: Tarih): Tarih[] {
   const gunler = new Set<Tarih>()
   for (const m of t.malikDonemleri) {
     const adaylar = m.gecerlilikBitis === null ? [m.gecerlilikBaslangic] : [m.gecerlilikBaslangic, gunEkle(m.gecerlilikBitis, 1)]
@@ -102,7 +111,7 @@ function kesimGunleri(t: ParcaGirdisi, ilk: Tarih, son: Tarih): Tarih[] {
  * (bakış günü = max(vade, dönem başı): peşin AYIN_GUNU vadesi dönem başından önce düşebilir). Bölünmüş taksitte dönem, malik kümesinin
  * değiştiği günlerde kesilir; aynı kümeli ardışık parçalar birleşir. `degisiklikVar`: [dönem başı, max(dönem bitişi, vade)] içinde küme değişiyor.
  */
-export function malikParcalari(t: ParcaGirdisi): { parcalar: MalikParcasi[]; degisiklikVar: boolean } {
+export function malikParcalari<M extends MalikGecerliligi>(t: ParcaGirdisi<M>): { parcalar: MalikParcasi<M>[]; degisiklikVar: boolean } {
   // Her kesim günü kümeyi değiştirir: o gün bir kayıt başlar ya da bir önceki gün biten kayıt düşer (kayıt kimlikleri benzersizdir).
   const degisiklikVar = kesimGunleri(t, t.donemBaslangic, enBuyukTarih(t.donemBitis, t.vade)).length > 0
   if (!t.bolunsun) {

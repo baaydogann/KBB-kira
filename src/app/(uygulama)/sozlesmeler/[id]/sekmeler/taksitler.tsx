@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import type { TaksitGoruntusu } from '@/core/hesap/goruntu'
 import { tarihDbOpt } from '@/server/donustur'
 import type { SozlesmeDetayi } from '@/server/sozlesme/sorgu'
@@ -26,7 +27,10 @@ export function TaksitlerSekmesi({ s }: { s: SozlesmeDetayi }) {
               </Td>
               <Td>{x.tur}{g.artisBekleniyor ? <span className="ml-1"><Rozet ton="sari">artış bekleniyor (tahmini)</Rozet></span> : null}</Td>
               <Td className="text-right"><ParaMetni deger={x.tutar.toFixed(2)} /></Td>
-              <Td><Rozet ton={TON[x.durum] ?? 'gri'}>{x.durum}</Rozet></Td>
+              <Td>
+                <Rozet ton={TON[x.durum] ?? 'gri'}>{x.durum}</Rozet>
+                {x.paketKayitlari[0] ? <Link href={`/odeme-paketleri/${x.paketKayitlari[0].paketId}`} className="ml-1 text-xs text-marka hover:underline">paket #{x.paketKayitlari[0].paketId}</Link> : null}
+              </Td>
               <Td><HesapIzi satirlar={g.satirlar ?? []} /></Td>
             </tr>
           )

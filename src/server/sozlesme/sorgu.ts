@@ -45,7 +45,11 @@ export async function sozlesmeDetayi(id: number, bugun: Tarih = bugunIstanbul())
       malikler: { include: { kisi: true, iban: true, vekil: true }, orderBy: [{ gecerlilikBaslangic: 'desc' }, { id: 'asc' }] },
       kiraDonemleri: { orderBy: { baslangic: 'asc' } },
       artislar: { orderBy: { donemBaslangic: 'desc' } },
-      taksitler: { orderBy: [{ donemBaslangic: 'asc' }, { tur: 'asc' }] },
+      taksitler: {
+        orderBy: [{ donemBaslangic: 'asc' }, { tur: 'asc' }],
+        // Taksitin içinde bulunduğu aktif ödeme paketi (en çok bir tane; kısmi tekil dizin).
+        include: { paketKayitlari: { where: { aktif: true }, select: { paketId: true } } },
+      },
     },
   })
   if (!s) throw new BulunamadiHatasi('Sözleşme bulunamadı.')
