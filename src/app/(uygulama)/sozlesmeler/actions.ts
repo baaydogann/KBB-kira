@@ -10,12 +10,13 @@ import { islemBaglami, kullaniciGerekli } from '@/server/auth/gerekli'
 import type { IslemBaglami } from '@/server/baglam'
 import { prisma } from '@/server/db'
 import { IsKuraliHatasi } from '@/server/hata'
+import { eylemSonrasiHatirlatmalariTazele } from '@/server/isler/hatirlatma-uret'
 import { sozlesmeAramaHedefi } from '@/server/sozlesme/arama'
 import { kayitSonrasiHataMi, taslakKaydetVeBagla } from '@/server/sozlesme/kaydet'
 import { malikGirdisiSemasi, sozlesmeGirdisiSemasi } from '@/server/sozlesme/sema'
 import { sozlesmeAktiflestir, sozlesmeOnizle, type OnizlemeCiktisi } from '@/server/sozlesme/servis'
 import { belirsizSureliyeCevir, malikleriDegistir, sozlesmeFeshet, sozlesmeSonlandir, sozlesmeYenile, taslakSil } from '@/server/sozlesme/yasam-dongusu'
-import { basariDurumu, formDegerleri, formKimligi, formMetni, formSurum, hataDurumu, type FormDurumu } from '@/app/_lib/form'
+import { basariDurumu, formDegerleri, formKimligi, formMetni, formSurum, hataDurumu, uyariIle, type FormDurumu } from '@/app/_lib/form'
 
 // İstemci bileşenlerinden gelen kimlikler FormData değil argümandır; yine de güvenilmez girdidir: PostgreSQL INTEGER aralığında doğrulanır.
 const kimlikSemasi = z.number().int().min(1).max(2_147_483_647)
@@ -87,7 +88,15 @@ function yenile(id: number) {
   revalidatePath('/sozlesmeler')
 }
 
-/** Sürüm koşullu yaşam döngüsü eylemlerinin ortak gövdesi: oturum, kimlik/sürüm, hata dönüşümü, önbellek tazeleme. */
+/**
+ * Sözleşme, artış ya da bedel durumunu değiştiren eylem kalıcı olduktan sonra hatırlatmalar ayrı bir işlemde hemen yenilenir (en iyi
+ * çaba): hata eylemi geri almaz, engellemeyen uyarı olarak döner (bkz. `eylemSonrasiHatirlatmalariTazele`).
+ */
+async function basariVeTazele(mesaj: string): Promise<FormDurumu> {
+  return uyariIle(basariDurumu(mesaj), await eylemSonrasiHatirlatmalariTazele())
+}
+
+/** Sürüm koşullu yaşam döngüsü eylemlerinin ortak gövdesi: oturum, kimlik/sürüm, hata dönüşümü, hatırlatma ve önbellek tazeleme. */
 async function surumluEylem(
   f: FormData, basari: string, calistir: (id: number, version: number, baglam: IslemBaglami) => Promise<void>,
 ): Promise<FormDurumu> {
@@ -100,8 +109,9 @@ async function surumluEylem(
   } catch (e) {
     return hataDurumu(e, f)
   }
+  const durum = await basariVeTazele(basari)
   yenile(id)
-  return basariDurumu(basari)
+  return durum
 }
 
 export async function aktiflestirAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
@@ -131,6 +141,8 @@ export async function yenileAction(_: FormDurumu, f: FormData): Promise<FormDuru
   } catch (e) {
     return hataDurumu(e)
   }
+  // Yönlendirmede uyarı kanalı yok: tazeleme hatası yalnızca günlüğe yazılır.
+  await eylemSonrasiHatirlatmalariTazele()
   yenile(eskiId)
   redirect(`/sozlesmeler/${yeniId}/duzenle`)
 }
@@ -151,6 +163,7 @@ export async function taslakSilAction(_: FormDurumu, f: FormData): Promise<FormD
   } catch (e) {
     return hataDurumu(e)
   }
+  await eylemSonrasiHatirlatmalariTazele()
   revalidatePath('/sozlesmeler')
   redirect('/sozlesmeler')
 }
@@ -174,8 +187,9 @@ export async function malikDegistirAction(veri: unknown): Promise<FormDurumu> {
   } catch (e) {
     return hataDurumu(e)
   }
+  const durum = await basariVeTazele('Malik değişikliği kaydedildi.')
   yenile(id)
-  return basariDurumu('Malik değişikliği kaydedildi.')
+  return durum
 }
 
 const alanHatasi = (f: FormData, alan: string, mesaj: string): FormDurumu =>
@@ -192,8 +206,9 @@ export async function artisOnaylaAction(_: FormDurumu, f: FormData): Promise<For
   } catch (e) {
     return hataDurumu(e, f)
   }
+  const durum = await basariVeTazele('Artış onaylandı; yeni kira dönemi açıldı ve planlı taksitler yeniden hesaplandı.')
   if (sozlesmeId !== null) yenile(sozlesmeId)
-  return basariDurumu('Artış onaylandı; yeni kira dönemi açıldı ve planlı taksitler yeniden hesaplandı.')
+  return durum
 }
 
 export async function artisElleOranAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
@@ -208,8 +223,9 @@ export async function artisElleOranAction(_: FormDurumu, f: FormData): Promise<F
   } catch (e) {
     return hataDurumu(e, f)
   }
+  const durum = await basariVeTazele('Oran kaydedildi ve artış hesaplandı.')
   if (sozlesmeId !== null) yenile(sozlesmeId)
-  return basariDurumu('Oran kaydedildi ve artış hesaplandı.')
+  return durum
 }
 
 export async function artislariSimdiHesaplaAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
@@ -223,10 +239,11 @@ export async function artislariSimdiHesaplaAction(_: FormDurumu, f: FormData): P
   } catch (e) {
     return hataDurumu(e, f)
   }
-  yenile(id)
-  return basariDurumu(r.hesaplanan + r.bekleyen === 0
+  const durum = await basariVeTazele(r.hesaplanan + r.bekleyen === 0
     ? 'Hesaplanacak artış yok (sıradaki artış tarihi ufuk dışında veya onay bekliyor).'
     : `Hesaplandı: ${r.hesaplanan}, endeks bekleyen: ${r.bekleyen}.`)
+  yenile(id)
+  return durum
 }
 
 const BEDEL_KAYNAKLARI = ['TESPIT', 'ANLASMA', 'ELLE'] as const
@@ -248,6 +265,7 @@ export async function kiraBedeliDegistirAction(_: FormDurumu, f: FormData): Prom
   } catch (e) {
     return hataDurumu(e, f)
   }
+  const durum = await basariVeTazele('Kira bedeli değişikliği kaydedildi.')
   yenile(sozlesmeId)
-  return basariDurumu('Kira bedeli değişikliği kaydedildi.')
+  return durum
 }

@@ -4,7 +4,7 @@ import { BulunamadiHatasi, CakismaHatasi, IsKuraliHatasi } from '@/server/hata'
 import { ParametreYokHatasi } from '@/server/parametre/servis'
 import type { FormDurumu } from './form-durumu'
 
-export { BOS_FORM, basariDurumu, type FormDurumu } from './form-durumu'
+export { BOS_FORM, basariDurumu, uyariIle, type FormDurumu } from './form-durumu'
 
 // Doğrulama mesajları Türkçe (spec §15). Zod'u kullanan her server action bu modülden geçer.
 z.config(z.locales.tr())

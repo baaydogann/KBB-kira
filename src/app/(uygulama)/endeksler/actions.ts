@@ -8,7 +8,8 @@ import { islemBaglami, kullaniciGerekli } from '@/server/auth/gerekli'
 import type { IslemBaglami } from '@/server/baglam'
 import { prisma } from '@/server/db'
 import { endeksElleGir, endeksOnayla, oranSerisiMi } from '@/server/endeks/servis'
-import { basariDurumu, formDegerleri, formKimligi, formMetni, hataDurumu, type FormDurumu } from '@/app/_lib/form'
+import { eylemSonrasiHatirlatmalariTazele } from '@/server/isler/hatirlatma-uret'
+import { basariDurumu, formDegerleri, formKimligi, formMetni, hataDurumu, uyariIle, type FormDurumu } from '@/app/_lib/form'
 
 const DUZ_ONDALIK = /^-?\d+(\.\d+)?$/
 
@@ -49,8 +50,10 @@ export async function endeksOnaylaAction(_: FormDurumu, f: FormData): Promise<Fo
     return hataDurumu(e, f)
   }
   const uyari = await bekleyenArtislariHesapla(baglam)
+  // Onay H4'ü kapatır, hesaplanan artış H5'i değiştirir: hatırlatmalar hemen yenilenir (en iyi çaba, ayrı işlem).
+  const durum = uyariIle(basariDurumu('Endeks onaylandı.'), uyari, await eylemSonrasiHatirlatmalariTazele())
   revalidatePath('/endeksler')
-  return { ...basariDurumu('Endeks onaylandı.'), ...(uyari === undefined ? {} : { uyari }) }
+  return durum
 }
 
 export async function endeksElleGirAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
@@ -69,6 +72,7 @@ export async function endeksElleGirAction(_: FormDurumu, f: FormData): Promise<F
     return hataDurumu(e, f)
   }
   const uyari = await bekleyenArtislariHesapla(baglam)
+  const durum = uyariIle(basariDurumu('Değer onaylı olarak kaydedildi.'), uyari, await eylemSonrasiHatirlatmalariTazele())
   revalidatePath('/endeksler')
-  return { ...basariDurumu('Değer onaylı olarak kaydedildi.'), ...(uyari === undefined ? {} : { uyari }) }
+  return durum
 }

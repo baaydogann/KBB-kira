@@ -8,6 +8,8 @@ vi.mock('@/server/auth/gerekli', () => ({
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }))
 
 import { endeksElleGirAction, endeksOnaylaAction } from '@/app/(uygulama)/endeksler/actions'
+import { aktiflestirAction, feshetAction } from '@/app/(uygulama)/sozlesmeler/actions'
+import { hatirlatmaIsi, TAZELEME_UYARISI } from '@/server/isler/hatirlatma-uret'
 import { prisma } from '@/server/db'
 import { para } from '@/core/para'
 import { ayEkle, ayinIlkGunu, ayKaydir, bugunIstanbul, gunEkle, tarih as t, tarihinAyi, type Tarih } from '@/core/tarih'
@@ -385,6 +387,46 @@ describe('spec §8: endeks onayı bekleyen artışı hesaplatır', () => {
     expect(r.uyari).toContain('ARTIS_HESAP_UFUK_GUN')
     expect((await prisma.endeksDegeri.findUniqueOrThrow({ where: { id: e.id } })).onayDurumu).toBe('ONAYLANDI')
     expect((await prisma.artisHesabi.findUniqueOrThrow({ where: { id: artisId } })).durum).toBe('BEKLEMEDE')
+  })
+})
+
+describe('eylem sonrası hatırlatma tazeleme (en iyi çaba)', () => {
+  const BOS = { hata: null, alanHatalari: {}, tamam: false }
+  const form = (alanlar: Record<string, string>) => {
+    const f = new FormData()
+    for (const [ad, deger] of Object.entries(alanlar)) f.set(ad, deger)
+    return f
+  }
+  const durum = async (anahtar: string) => (await prisma.hatirlatma.findUnique({ where: { anahtar } }))?.durum
+
+  it('aktifleştirme hatırlatmaları hemen yeniler: taslak hatırlatması kapanır, eksik veri hatırlatması açılır', async () => {
+    await prisma.kullanici.create({ data: { id: 1, kullaniciAdi: 'test', adSoyad: 'Test', sifreHash: 'x' } })
+    const bugun = bugunIstanbul()
+    const id = await sozlesmeTaslakKaydet(girdi(h, { baslangic: bugun, bitis: gunEkle(ayEkle(bugun, 12), -1) }), TEST_BAGLAMI)
+    await hatirlatmaIsi(bugun)
+    expect(await durum(`H12:sozlesme:${id}:TASLAK_AKTIF_DEGIL`)).toBe('ACIK')
+    const r = await aktiflestirAction(BOS, form({ id: String(id), version: '0' }))
+    expect(r).toMatchObject({ tamam: true, hata: null })
+    expect(r.uyari).toBeUndefined()
+    expect(await durum(`H12:sozlesme:${id}:TASLAK_AKTIF_DEGIL`)).toBe('OTOMATIK_KAPANDI')
+    expect(await durum(`H12:sozlesme:${id}:SOZLESME_PDF_YOK`)).toBe('ACIK')
+  })
+
+  it('tazeleme başarısız olsa da eylem tamamlanır; günlüğe yazılır ve engellemeyen uyarı döner', async () => {
+    await prisma.kullanici.create({ data: { id: 1, kullaniciAdi: 'test', adSoyad: 'Test', sifreHash: 'x' } })
+    const bugun = bugunIstanbul()
+    const id = await sozlesme({ baslangic: ayEkle(bugun, -2), bitis: gunEkle(ayEkle(bugun, 10), -1) }, ayEkle(bugun, -2))
+    const s = await prisma.sozlesme.findUniqueOrThrow({ where: { id } })
+    await prisma.parametre.deleteMany({ where: { anahtar: 'HATIRLATMA_VADE_GORUNUR_GUN' } })
+    const konsol = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      const r = await feshetAction(BOS, form({ id: String(id), version: String(s.version), tarih: gunEkle(bugun, 30), neden: 'Hizmet binası taşınacak' }))
+      expect(r).toMatchObject({ tamam: true, hata: null, uyari: TAZELEME_UYARISI })
+      expect(konsol).toHaveBeenCalledWith('[eylem] hatırlatma tazeleme hatası', expect.anything())
+    } finally {
+      konsol.mockRestore()
+    }
+    expect((await prisma.sozlesme.findUniqueOrThrow({ where: { id } })).durum).toBe('FESHEDILDI')
   })
 })
 
