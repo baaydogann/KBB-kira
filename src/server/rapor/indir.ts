@@ -7,15 +7,39 @@ import { prisma } from '../db'
 import { disaAktarimKaydi } from '../denetim'
 import { IsKuraliHatasi } from '../hata'
 import { damgaBeyanListesi, kesinti22aListesi, muhtasarListesi, type RaporTablosu } from './vergi'
+import { durumTablosu, gecikmisTablosu, odenekTablosu } from './yonetim'
 
-export type RaporAdi = 'muhtasar' | 'damga' | 'kesinti-22a'
+export type RaporAdi = 'muhtasar' | 'damga' | 'kesinti-22a' | 'odenek' | 'gecikmis' | 'sozlesme-durum'
 
 const AY_BICIMI = /^\d{4}-(0[1-9]|1[0-2])$/
+const YIL_BICIMI = /^\d{4}$/
 
-const RAPORLAR: Record<RaporAdi, (ay: Ay) => Promise<RaporTablosu>> = {
-  muhtasar: muhtasarListesi,
-  damga: damgaBeyanListesi,
-  'kesinti-22a': kesinti22aListesi,
+/** Rapor başına sorgu parametresi: dönem etiketi (dosya adı ve denetim) ve tablo üretici. */
+type Hazirlayici = (q: URLSearchParams, bugun: Tarih) => { etiket: string; uret: () => Promise<RaporTablosu> }
+
+function ayParametresi(q: URLSearchParams): { etiket: string; ay: Ay } {
+  const metin = q.get('ay') ?? ''
+  if (!AY_BICIMI.test(metin)) throw new IsKuraliHatasi('AY', 'Ay YYYY-AA biçiminde olmalı (ör. 2026-09).', 'ay')
+  const [yil, ay] = metin.split('-').map(Number) as [number, number]
+  return { etiket: metin, ay: { yil, ay } }
+}
+
+const aylik = (f: (ay: Ay) => Promise<RaporTablosu>): Hazirlayici => (q) => {
+  const { etiket, ay } = ayParametresi(q)
+  return { etiket, uret: () => f(ay) }
+}
+
+const RAPORLAR: Record<RaporAdi, Hazirlayici> = {
+  muhtasar: aylik(muhtasarListesi),
+  damga: aylik(damgaBeyanListesi),
+  'kesinti-22a': aylik(kesinti22aListesi),
+  odenek: (q, bugun) => {
+    const yil = q.get('yil') ?? ''
+    if (!YIL_BICIMI.test(yil)) throw new IsKuraliHatasi('YIL', 'Yıl dört haneli olmalı (ör. 2026).', 'yil')
+    return { etiket: yil, uret: () => odenekTablosu(Number(yil), bugun) }
+  },
+  gecikmis: (_, bugun) => ({ etiket: bugun, uret: () => gecikmisTablosu(bugun) }),
+  'sozlesme-durum': (_, bugun) => ({ etiket: bugun, uret: () => durumTablosu(bugun) }),
 }
 
 const raporAdiMi = (x: string): x is RaporAdi => Object.hasOwn(RAPORLAR, x)
@@ -41,20 +65,17 @@ function ozetSayfasi(r: RaporTablosu): ExcelSayfasi {
 /** Bilinmeyen rapor adı → null (404). Hatalı sorgu parametresi → IsKuraliHatasi (400). */
 export async function raporIndir(rapor: string, q: URLSearchParams, baglam: IslemBaglami, bugun: Tarih):
   Promise<{ dosyaAdi: string; icerik: Buffer | string; tur: 'xlsx' | 'csv' } | null> {
-  void bugun
   if (!raporAdiMi(rapor)) return null
-  const ayMetni = q.get('ay') ?? ''
-  if (!AY_BICIMI.test(ayMetni)) throw new IsKuraliHatasi('AY', 'Ay YYYY-AA biçiminde olmalı (ör. 2026-09).', 'ay')
+  const { etiket, uret } = RAPORLAR[rapor](q, bugun)
   const bicim = q.get('bicim') ?? 'xlsx'
   if (bicim !== 'xlsx' && bicim !== 'csv') throw new IsKuraliHatasi('BICIM', 'Biçim xlsx ya da csv olmalı.', 'bicim')
-  const [yil, ay] = ayMetni.split('-').map(Number) as [number, number]
-  const r = await RAPORLAR[rapor]({ yil, ay })
+  const r = await uret()
   const icerik = bicim === 'csv'
     ? csvUret(r.sutunlar.map((s) => s.baslik), r.satirlar.map((satir) => r.sutunlar.map((s, i) => csvDegeri(s.tur, satir[i] ?? null))))
     : await excelUret([
       { ad: r.baslik, sutunlar: r.sutunlar, satirlar: r.satirlar, ...(r.uyarilar.length > 0 ? { dipnot: r.uyarilar.join(' ') } : {}) },
       ...(rapor === 'kesinti-22a' ? [ozetSayfasi(r)] : []),
     ])
-  await disaAktarimKaydi(prisma, baglam, { varlik: 'rapor', varlikId: rapor, belge: `${rapor}:${ayMetni}`, kayitSayisi: r.satirlar.length })
-  return { dosyaAdi: `${rapor}-${ayMetni}.${bicim}`, icerik, tur: bicim }
+  await disaAktarimKaydi(prisma, baglam, { varlik: 'rapor', varlikId: rapor, belge: `${rapor}:${etiket}`, kayitSayisi: r.satirlar.length })
+  return { dosyaAdi: `${rapor}-${etiket}.${bicim}`, icerik, tur: bicim }
 }
