@@ -205,7 +205,9 @@ function sozlesmeKurallari(v: HatirlatmaVerisi, s: SozlesmeOzeti, ekle: Ekle): v
       if (sira < 0 || (sira === 0 && !s.ilkDonemArtisBekliyor)) continue
       const kayit = v.artislar.find((x) => x.sozlesmeId === s.id && x.donemBaslangic === d)
       if (kayit?.durum === 'ONAYLANDI') continue
-      const durumMetni = kayit === undefined ? 'yaklaşıyor' : kayit.durum === 'BEKLEMEDE' ? 'endeks bekleniyor' : 'onayınızı bekliyor'
+      // Bekleyen ELLE artışı endeksi değil kullanıcının oran girişini bekler.
+      const bekleyenMetni = s.artisKurali === 'ELLE' ? 'oran girişi bekleniyor' : 'endeks bekleniyor'
+      const durumMetni = kayit === undefined ? 'yaklaşıyor' : kayit.durum === 'BEKLEMEDE' ? bekleyenMetni : 'onayınızı bekliyor'
       ekle({
         ...ortak, anahtar: `H5:sozlesme:${s.id}:${d}`, kural: 'H5',
         baslik: `Kira artışı ${durumMetni} — ${s.no}`,

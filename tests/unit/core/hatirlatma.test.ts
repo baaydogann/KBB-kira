@@ -431,6 +431,19 @@ describe('mutasyon kapısı: metinler, karar bayrakları ve tarih sınırları',
     expect(baslik([{ sozlesmeId: '1', donemBaslangic: t('2026-11-01'), durum: 'HESAPLANDI' }])).toBe('Kira artışı onayınızı bekliyor — S-1')
   })
 
+  it('H5: ELLE kuralında bekleyen artış "oran girişi bekleniyor" der; diğer kurallarda "endeks bekleniyor"', () => {
+    const baslik = (artisKurali: SozlesmeOzeti['artisKurali']) => bir(veri({
+      sozlesmeler: [artisliSozlesme({ artisKurali })], artislar: [{ sozlesmeId: '1', donemBaslangic: t('2026-11-01'), durum: 'BEKLEMEDE' }],
+    }), 'H5').baslik
+    expect(baslik('ELLE')).toBe('Kira artışı oran girişi bekleniyor — S-1')
+    expect(baslik('TUFE12')).toBe('Kira artışı endeks bekleniyor — S-1')
+    expect(baslik('SABIT')).toBe('Kira artışı endeks bekleniyor — S-1')
+    // Hesaplanmış ELLE artışı yine onay bekler.
+    expect(bir(veri({
+      sozlesmeler: [artisliSozlesme({ artisKurali: 'ELLE' })], artislar: [{ sozlesmeId: '1', donemBaslangic: t('2026-11-01'), durum: 'HESAPLANDI' }],
+    }), 'H5').baslik).toBe('Kira artışı onayınızı bekliyor — S-1')
+  })
+
   it('H5: artış tarihi bugünse KRITIK, gelecekteyse YUKSEK', () => {
     const bugunku = artisliSozlesme({ ilkKiraBaslangici: t('2025-10-15'), baslangic: t('2025-10-15'), sonKiraDonemiBaslangici: t('2025-10-15') })
     expect(bir(veri({ sozlesmeler: [bugunku] }), 'H5')).toMatchObject({ anahtar: 'H5:sozlesme:1:2026-10-15', oncelik: 'KRITIK' })
