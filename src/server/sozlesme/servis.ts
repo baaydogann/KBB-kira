@@ -2,7 +2,7 @@ import { hisseToplamiBirMi } from '@/core/hisse'
 import { sozlesmeOnizleme, type OnizlemeSatiri } from '@/core/hesap/onizleme'
 import type { KiraDonemiGirdi } from '@/core/hesap/taksit-tutari'
 import type { Para } from '@/core/para'
-import { ayEkle, ayFarki, bugunIstanbul, enBuyukTarih, enKucukTarih, gunEkle, icindeMi, karsilastir, type Tarih } from '@/core/tarih'
+import { ayEkle, ayFarki, bugunIstanbul, enBuyukTarih, enKucukTarih, formatTarih, gunEkle, icindeMi, karsilastir, type Tarih } from '@/core/tarih'
 import type { VergiStatusu } from '@/core/tipler'
 import type { Sozlesme } from '@/generated/prisma'
 import type { IslemBaglami } from '../baglam'
@@ -12,7 +12,7 @@ import { dbTarih, dbTarihOpt, oranYaz, paraDb, paraYaz, tarihDb, tarihDbOpt } fr
 import { BulunamadiHatasi, CakismaHatasi, IsKuraliHatasi, benzersizIhlaliMi } from '../hata'
 import { kisiGorunenAd } from '../kisi/servis'
 import { varsayilanEkonomikKod, vergiOranlari } from '../parametre/servis'
-import { taksitPlaniniGuncelle } from '../taksit/servis'
+import { fazlaOdemeHatirlat, taksitPlaniniGuncelle, vadesiGecmisMi } from '../taksit/servis'
 import type { MalikGirdisi, SozlesmeGirdisi } from './sema'
 
 function sozlesmeVerisi(g: SozlesmeGirdisi, ekonomikKod: string) {
@@ -205,10 +205,42 @@ export async function sozlesmeOnizle(g: SozlesmeGirdisi, bugun: Tarih = bugunIst
 }
 
 /**
- * Yenileme zincirinde önceki sözleşmeyi yeni başlangıçtan bir gün önce kapatır. Kilit sırası yeni → eski: yeni sözleşme
- * etkinleştirme sorgusuyla zaten kilitlidir, eskisi burada sürüm koşullu tek güncellemeyle kilitlenir.
+ * Yenileme devri: önceki sözleşmenin, dönemi yeni sözleşmenin başlangıcında ya da sonrasında başlayan PLANLANDI taksitleri (FARK dahil)
+ * vadesi geçmiş olsa da iptal edilir; yeni sözleşmenin aynı dönem taksitleri onların yerini alır (C1 dondurmasının bilinçli istisnası:
+ * aksi halde aynı ay için iki H1 ve çift ödeme riski olurdu). Korumalı yazma: okuma ile yazma arasında ödeme sürecine giren satır varsa
+ * CakismaHatasi. Vadesi geçmiş devredilen her taksit için mahsup kontrolü (H5_FAZLA_ODEME) hatırlatması açılır: sistem dışında
+ * ödenmiş olabilir. Ödeme sürecindeki (PAKETTE/ODEME_EMRINDE/ODENDI) satırlara dokunulmaz. İptal edilen kimlikleri döndürür.
  */
-async function oncekiSozlesmeyiKapat(tx: Tx, oncekiId: number, yeni: { baslangic: Tarih; ilkKiraBaslangici: Tarih }, baglam: IslemBaglami, bugun: Tarih): Promise<void> {
+async function yenilemeyeDevret(
+  tx: Tx, o: { id: number; sozlesmeNo: string }, yeni: { baslangic: Tarih; sozlesmeNo: string }, bugun: Tarih,
+): Promise<number[]> {
+  const satirlar = await tx.taksit.findMany({
+    where: { sozlesmeId: o.id, durum: 'PLANLANDI', donemBaslangic: { gte: dbTarih(yeni.baslangic) } },
+    orderBy: [{ donemBaslangic: 'asc' }, { id: 'asc' }],
+  })
+  if (satirlar.length === 0) return []
+  const idler = satirlar.map((x) => x.id)
+  const r = await tx.taksit.updateMany({ where: { id: { in: idler }, durum: 'PLANLANDI' }, data: { durum: 'IPTAL', version: { increment: 1 } } })
+  if (r.count !== idler.length) throw new CakismaHatasi()
+  for (const x of satirlar.filter((y) => vadesiGecmisMi(y.vadeTarihi, bugun))) {
+    const donem = `${formatTarih(tarihDb(x.donemBaslangic))} – ${formatTarih(tarihDb(x.donemBitis))}`
+    await fazlaOdemeHatirlat(tx, {
+      taksitId: x.id, ek: 'DEVIR', sozlesmeId: o.id, baslik: `Fazla ödeme kontrolü — ${o.sozlesmeNo}`,
+      aciklama: `Önceki sözleşmenin ${donem} taksiti (vade ${formatTarih(tarihDb(x.vadeTarihi))}) yeni sözleşmeye (${yeni.sozlesmeNo}) devredildi; `
+        + 'ödendiyse yeni sözleşmenin aynı dönem taksitinden mahsup edin.',
+    }, bugun, true)
+  }
+  return idler
+}
+
+/**
+ * Yenileme zincirinde önceki sözleşmeyi yeni başlangıçtan bir gün önce kapatır. Kilit sırası yeni → eski: yeni sözleşme
+ * etkinleştirme sorgusuyla zaten kilitlidir, eskisi burada sürüm koşullu tek güncellemeyle kilitlenir. Yeni sözleşmenin dönemlerine
+ * düşen planlı taksitler önce devredilir (`yenilemeyeDevret`), sonra plan kalan dönemlere göre yeniden üretilir.
+ */
+async function oncekiSozlesmeyiKapat(
+  tx: Tx, oncekiId: number, yeni: { baslangic: Tarih; ilkKiraBaslangici: Tarih; sozlesmeNo: string }, baglam: IslemBaglami, bugun: Tarih,
+): Promise<void> {
   const o = await tx.sozlesme.findUnique({ where: { id: oncekiId } })
   if (!o) return
   if (tarihDb(o.ilkKiraBaslangici) !== yeni.ilkKiraBaslangici) {
@@ -232,13 +264,14 @@ async function oncekiSozlesmeyiKapat(tx: Tx, oncekiId: number, yeni: { baslangic
     data: { bitis: dbTarih(yeniBitis), durum: 'SONA_ERDI', uzamaSayisi, version: { increment: 1 } },
   })
   if (r.count === 0) throw new CakismaHatasi()
+  const devredilenTaksitIdleri = await yenilemeyeDevret(tx, o, yeni, bugun)
   const plan = await taksitPlaniniGuncelle(tx, o.id, bugun)
   // uzamaSayisi yalnızca değiştiyse denetim satırına yazılır (kapanış otomatik uzama yıllarına denk gelmişse).
   const uzamaDegisti = uzamaSayisi !== o.uzamaSayisi
   await denetimKaydi(tx, baglam, {
     varlik: 'sozlesme', varlikId: o.id, eylem: 'YENILEME_ILE_SONA_ERDI',
     once: { bitis: eskiBitis, durum: o.durum, ...(uzamaDegisti ? { uzamaSayisi: o.uzamaSayisi } : {}) },
-    sonra: { bitis: yeniBitis, durum: 'SONA_ERDI', ...(uzamaDegisti ? { uzamaSayisi } : {}), plan },
+    sonra: { bitis: yeniBitis, durum: 'SONA_ERDI', ...(uzamaDegisti ? { uzamaSayisi } : {}), devredilenTaksitIdleri, plan },
   })
 }
 
@@ -277,7 +310,7 @@ export async function sozlesmeAktiflestir(id: number, version: number, baglam: I
       })
     }
     if (s.oncekiSozlesmeId !== null) {
-      await oncekiSozlesmeyiKapat(tx, s.oncekiSozlesmeId, { baslangic: bas, ilkKiraBaslangici: tarihDb(s.ilkKiraBaslangici) }, baglam, bugun)
+      await oncekiSozlesmeyiKapat(tx, s.oncekiSozlesmeId, { baslangic: bas, ilkKiraBaslangici: tarihDb(s.ilkKiraBaslangici), sozlesmeNo: s.sozlesmeNo }, baglam, bugun)
     }
     const plan = await taksitPlaniniGuncelle(tx, id, bugun)
     await denetimKaydi(tx, baglam, { varlik: 'sozlesme', varlikId: id, eylem: 'AKTIFLESTIR', sonra: { durum: 'AKTIF', plan } })

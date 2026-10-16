@@ -428,7 +428,12 @@ describe('denetim özeti ve yenileme zinciri', () => {
     // I1: işyeri planları ufka (2028-01) kadar sürer; kesim sonrası tüm planlı satırlar iptal olur.
     expect(await sonra(eskiId, 'AKTIFLESTIR')).toEqual({ durum: 'AKTIF', plan: { eklenen: 25, guncellenen: 0, iptal: 0, gecmisDokunulmadi: 0 } })
     expect(await sonra(yeniId, 'AKTIFLESTIR')).toEqual({ durum: 'AKTIF', plan: { eklenen: 19, guncellenen: 0, iptal: 0, gecmisDokunulmadi: 0 } })
-    expect(await sonra(eskiId, 'YENILEME_ILE_SONA_ERDI')).toEqual({ bitis: '2026-06-30', durum: 'SONA_ERDI', plan: { eklenen: 0, guncellenen: 0, iptal: 19, gecmisDokunulmadi: 0 } })
+    // Yeni sözleşmenin dönemlerine düşen 19 planlı taksit plandan önce devredilir (iptal); plan ayrıca iptal etmez.
+    const devredilen = (await prisma.taksit.findMany({ where: { sozlesmeId: eskiId, donemBaslangic: { gte: new Date('2026-07-01') } }, orderBy: { donemBaslangic: 'asc' } })).map((x) => x.id)
+    expect(devredilen).toHaveLength(19)
+    expect(await sonra(eskiId, 'YENILEME_ILE_SONA_ERDI')).toEqual({
+      bitis: '2026-06-30', durum: 'SONA_ERDI', devredilenTaksitIdleri: devredilen, plan: { eklenen: 0, guncellenen: 0, iptal: 0, gecmisDokunulmadi: 0 },
+    })
   })
 
   it('yenileme sözleşmesinin ilk kira başlangıcı öncekinden farklıysa aktifleşmez ve tümü geri alınır', async () => {
