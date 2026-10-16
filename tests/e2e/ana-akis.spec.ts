@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { ayEkle, bugunIstanbul, tarihinAyi } from '@/core/tarih'
 import { E2E_KULLANICI } from './global-setup'
 
 test('giriş → sözleşme sihirbazı → aktifleştirme → taksit planı → hatırlatma işi → pano', async ({ page }) => {
@@ -36,7 +37,9 @@ test('giriş → sözleşme sihirbazı → aktifleştirme → taksit planı → 
   await expect(page.getByText('Aktif', { exact: true })).toBeVisible()
 
   await page.getByRole('link', { name: 'Taksitler' }).click()
-  await expect(page.locator('tbody tr')).toHaveCount(12)
+  // I1: işyeri (TBK 347) planı bitişten sonra bugün + TAKVIM_UFUK_AY (24) ayına kadar sürer: 2026-01'den o aya kadar aylık satırlar.
+  const ufuk = tarihinAyi(ayEkle(bugunIstanbul(), 24))
+  await expect(page.locator('tbody tr')).toHaveCount((ufuk.yil - 2026) * 12 + ufuk.ay)
   await expect(page.getByText('10.000,00 ₺').first()).toBeVisible()
 
   // Gecikmiş hatırlatmaları worker üretir; e2e'de worker yok, işi Yönetim ekranından elle çalıştırırız.

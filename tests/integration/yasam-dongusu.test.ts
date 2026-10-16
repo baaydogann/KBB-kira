@@ -8,6 +8,8 @@ import {
 } from '@/server/sozlesme/yasam-dongusu'
 import { BulunamadiHatasi, CakismaHatasi, IsKuraliHatasi } from '@/server/hata'
 import { taksitPlaniniGuncelle } from '@/server/taksit/servis'
+import { hatirlatmalariUret } from '@/core/hatirlatma'
+import { hatirlatmaVerisiYukle } from '@/server/hatirlatma/servis'
 import { TEST_BAGLAMI, temizle } from './yardimci'
 import { girdi, hazirlik, type Hazirlik } from './sozlesme-yardimci'
 
@@ -71,7 +73,8 @@ describe('fesih', () => {
     const s = await prisma.sozlesme.findUniqueOrThrow({ where: { id } })
     expect([s.durum, iso(s.fesihTarihi)]).toEqual(['FESHEDILDI', '2026-06-15'])
     const taksitler = await prisma.taksit.findMany({ where: { sozlesmeId: id }, orderBy: { donemBaslangic: 'asc' } })
-    expect(taksitler.filter((x) => x.durum === 'IPTAL')).toHaveLength(6)
+    // I1: Temmuz–Aralık ve ufka kadar planlanan 2027-01..2028-01.
+    expect(taksitler.filter((x) => x.durum === 'IPTAL')).toHaveLength(19)
     const haziran = taksitler.find((x) => iso(x.donemBaslangic) === '2026-06-01')!
     expect([haziran.tur, iso(haziran.donemBitis), haziran.tutar.toFixed(2)]).toEqual(['KIST', '2026-06-15', '5000.00'])
   })
@@ -103,9 +106,10 @@ describe('fesih', () => {
     await sozlesmeFeshet(id, await surum(id), { tarih: t('2026-06-15'), neden: 'Hizmet binası taşındı' }, TEST_BAGLAMI, t('2026-05-01'))
     const kayit = await prisma.olayGunlugu.findFirstOrThrow({ where: { eylem: 'FESHET', varlikId: String(id) } })
     const sonra = kayit.sonra as { fesihSonrasiIslenmisTaksit: number; plan: { iptal: number } }
-    expect([sonra.fesihSonrasiIslenmisTaksit, sonra.plan.iptal]).toEqual([3, 3])
+    // I1: ufka kadar planlanan 2027-01..2028-01 (13) de iptal olur.
+    expect([sonra.fesihSonrasiIslenmisTaksit, sonra.plan.iptal]).toEqual([3, 16])
     const taksitler = await prisma.taksit.findMany({ where: { sozlesmeId: id }, orderBy: { donemBaslangic: 'asc' } })
-    expect(taksitler.slice(5).map((x) => x.durum)).toEqual(['ODENDI', 'PAKETTE', 'ODENDI', 'IPTAL', 'ODEME_EMRINDE', 'IPTAL', 'IPTAL'])
+    expect(taksitler.slice(5).map((x) => x.durum)).toEqual(['ODENDI', 'PAKETTE', 'ODENDI', 'IPTAL', 'ODEME_EMRINDE', 'IPTAL', 'IPTAL', ...Array.from({ length: 13 }, () => 'IPTAL')])
   })
 
   it('C1: geçmiş tarihli fesih vadesi geçmiş taksiti kıst ya da iptal yapmaz, fazla ödeme hatırlatması açar; vadesi gelmemişler iptal olur', async () => {
@@ -204,7 +208,8 @@ describe('otomatik uzama (TBK 347)', () => {
     expect([a!.durum, iso(a!.bitis), a!.uzamaSayisi]).toEqual(['UZADI', '2027-09-30', 1])
     expect([iso(b!.bitis), b!.uzamaSayisi]).toEqual(['2027-09-30', 3])
     expect([c!.durum, iso(c!.bitis)]).toEqual(['AKTIF', '2026-09-30'])
-    expect(await prisma.taksit.count({ where: { sozlesmeId: isyeri, donemBaslangic: { gte: new Date('2026-10-01') } } })).toBe(12)
+    // I1: uzayan işyeri planı ufka (2028-10) kadar sürer.
+    expect(await prisma.taksit.count({ where: { sozlesmeId: isyeri, donemBaslangic: { gte: new Date('2026-10-01') } } })).toBe(25)
     expect(await prisma.$transaction((tx) => otomatikUzat(tx, t('2026-10-15')))).toBe(0)
   })
 
@@ -249,8 +254,8 @@ describe('otomatik uzama (TBK 347)', () => {
     const s = await prisma.sozlesme.findUniqueOrThrow({ where: { id } })
     // Zincir 2026-02-27, 2027-02-27, 2028-02-27 verirdi; çapalı hesap ayEkle('2024-02-29', 48) - 1 = 2028-02-28.
     expect([s.durum, iso(s.bitis), s.uzamaSayisi]).toEqual(['UZADI', '2028-02-28', 3])
-    // Kira ayına hizalı son dönem (2028-01-29..2028-02-28) tam kalır.
-    const son = await prisma.taksit.findFirstOrThrow({ where: { sozlesmeId: id, durum: { not: 'IPTAL' } }, orderBy: { donemBaslangic: 'desc' } })
+    // Kira ayına hizalı bitiş dönemi (2028-01-29..2028-02-28) tam kalır (I1: plan bitişten sonra ufka kadar sürer).
+    const son = await prisma.taksit.findFirstOrThrow({ where: { sozlesmeId: id, durum: { not: 'IPTAL' }, donemBaslangic: new Date('2028-01-29') } })
     expect([iso(son.donemBaslangic), iso(son.donemBitis), son.tur]).toEqual(['2028-01-29', '2028-02-28', 'NORMAL'])
   })
 
@@ -366,6 +371,62 @@ describe('otomatik uzama (TBK 347)', () => {
   })
 })
 
+describe('I1: TBK 347 sözleşmelerinin planı bitişten sonra ufka kadar sürer', () => {
+  const taksitler = (id: number) => prisma.taksit.findMany({ where: { sozlesmeId: id, tur: { not: 'FARK' } }, orderBy: { donemBaslangic: 'asc' } })
+  const ay = (d: Date) => iso(d)!.slice(0, 7)
+
+  it('1 yıllık işyeri sözleşmesinin taksitleri bitişten sonra TAKVIM_UFUK_AY ufkuna kadar son bedelle planlanır; arsa planlanmaz', async () => {
+    const isyeri = await aktif()
+    const x = await taksitler(isyeri)
+    expect([ay(x[0]!.donemBaslangic), ay(x.at(-1)!.donemBaslangic), x.length]).toEqual(['2026-01', '2028-01', 25])
+    expect(x.every((t) => t.durum === 'PLANLANDI' && t.tur === 'NORMAL' && t.tutar.toFixed(2) === '10000.00')).toBe(true)
+    expect(x.filter((t) => iso(t.donemBaslangic)! > '2026-12-31')).toHaveLength(13)
+    const arsa = await aktif({ tasinmazId: h.arsaId })
+    const a = await taksitler(arsa)
+    expect([ay(a.at(-1)!.donemBaslangic), a.length]).toEqual(['2026-12', 12])
+  })
+
+  it('bitişi ay ortasında biten işyeri sözleşmesinin son dönemi kıst kesilmez (uzayacağı varsayılır)', async () => {
+    const id = await aktif({ baslangic: '2026-01-15', bitis: '2026-12-31' })
+    const aralik = (await taksitler(id)).find((t) => iso(t.donemBaslangic) === '2026-12-15')!
+    expect([aralik.tur, iso(aralik.donemBitis), aralik.tutar.toFixed(2)]).toEqual(['NORMAL', '2027-01-14', '10000.00'])
+  })
+
+  it('otomatik uzama yinelenen satır üretmez; fesih ufka kadar planlanan satırları iptal eder', async () => {
+    const id = await aktif()
+    expect(await prisma.$transaction((tx) => otomatikUzat(tx, t('2027-01-05')))).toBe(1)
+    const x = await taksitler(id)
+    const aktifler = x.filter((t) => t.durum !== 'IPTAL')
+    expect(new Set(aktifler.map((t) => iso(t.donemBaslangic))).size).toBe(aktifler.length)
+    expect([x.filter((t) => t.durum === 'IPTAL').length, ay(aktifler.at(-1)!.donemBaslangic)]).toEqual([0, '2029-01'])
+    const kayit = await prisma.olayGunlugu.findFirstOrThrow({ where: { eylem: 'OTOMATIK_UZAMA', varlikId: String(id) } })
+    expect((kayit.sonra as { plan: { eklenen: number; guncellenen: number; iptal: number } }).plan).toMatchObject({ eklenen: 12, guncellenen: 0, iptal: 0 })
+
+    const fesihli = await aktif()
+    await sozlesmeFeshet(fesihli, await surum(fesihli), { tarih: t('2026-06-15'), neden: 'Hizmet binası taşındı' }, TEST_BAGLAMI, t('2026-05-01'))
+    const f = await taksitler(fesihli)
+    expect(f.filter((t) => t.durum !== 'IPTAL').map((t) => ay(t.donemBaslangic)).at(-1)).toBe('2026-06')
+    expect(f.filter((t) => t.durum === 'IPTAL')).toHaveLength(19)
+  })
+
+  it('yenileme ile kapanan sözleşmenin ufka kadar planlanan satırları iptal olur; yenilemenin satırlarıyla çakışmaz', async () => {
+    const eski = await aktif()
+    const yeni = await sozlesmeYenile(eski, TEST_BAGLAMI)
+    await sozlesmeAktiflestir(yeni, 0, TEST_BAGLAMI, t('2026-12-20'))
+    const e = await taksitler(eski)
+    expect(e.filter((t) => t.durum !== 'IPTAL').map((t) => ay(t.donemBaslangic)).at(-1)).toBe('2026-12')
+    expect(e.filter((t) => t.durum === 'IPTAL').every((t) => iso(t.donemBaslangic)! >= '2027-01-01')).toBe(true)
+    expect(ay((await taksitler(yeni))[0]!.donemBaslangic)).toBe('2027-01')
+  })
+
+  it('sonraki kira yılının ilk taksiti H1 (7 gün önce) ve H2 hatırlatmasını önceden alır', async () => {
+    const id = await aktif()
+    const ocak = (await taksitler(id)).find((t) => iso(t.donemBaslangic) === '2027-01-01')!
+    const adaylar = hatirlatmalariUret(await prisma.$transaction((tx) => hatirlatmaVerisiYukle(tx, t('2026-12-25'))))
+    expect(adaylar.filter((x) => x.iliskiliTur === 'taksit' && x.iliskiliId === String(ocak.id)).map((x) => x.kural).sort()).toEqual(['H1', 'H2'])
+  })
+})
+
 describe('yenilemeyle kapanan sözleşmenin uzama yılları', () => {
   it.each([
     { yeniBaslangic: '2024-10-01', yeniBitis: '2025-09-30', uzama: 0, bitis: '2024-09-30' },
@@ -464,12 +525,14 @@ describe('denetim satırları (KVKK)', () => {
     const silinen = kayitlar[1]!.once as { sozlesmeNo: string; tasinmazId: number; malikler: unknown[] }
     expect([silinen.tasinmazId, silinen.malikler]).toEqual([h.tasinmazId, [{ kisiId: h.kisiA, pay: 1, payda: 1, ibanId: h.ibanA, vekilKisiId: null }]])
     const malik = kayitlar[4]!.sonra as { degisenAlanlar: string[]; malikler: unknown[]; plan: { eklenen: number } }
+    // I1: işyeri planı her çalışmada ufka kadar uzar (2026-05-01 + 24 ay: 2028-02..2028-05).
     expect([malik.degisenAlanlar, malik.malikler, malik.plan.eklenen]).toEqual([['malikler'], [
       { kisiId: h.kisiA, pay: 1, payda: 2, ibanId: h.ibanA, vekilKisiId: null },
       { kisiId: h.kisiB, pay: 1, payda: 2, ibanId: h.ibanB, vekilKisiId: null },
-    ], 0])
+    ], 4])
     const fesih = kayitlar[5]!.sonra as { degisenAlanlar: string[]; fesihTarihi: string; plan: { iptal: number } }
-    expect([fesih.degisenAlanlar, fesih.fesihTarihi, fesih.plan.iptal]).toEqual([['durum', 'fesihTarihi', 'fesihNedeni'], '2026-09-15', 3])
+    // I1: Ekim–Aralık ve ufka kadar planlanan 2027-01..2028-05.
+    expect([fesih.degisenAlanlar, fesih.fesihTarihi, fesih.plan.iptal]).toEqual([['durum', 'fesihTarihi', 'fesihNedeni'], '2026-09-15', 20])
   })
 })
 

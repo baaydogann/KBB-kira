@@ -32,7 +32,7 @@ describe('sözleşme sorguları', () => {
     await sozlesmeAktiflestir(id, 0, TEST_BAGLAMI, t('2026-01-01'))
     const d = await sozlesmeDetayi(id, t('2026-10-15'))
     expect(d.uyarilar.map((u) => u.kod)).toEqual(['GENELGE_ODEME_PERIYODU'])
-    expect(d.taksitler).toHaveLength(1)
+    expect(d.taksitler).toHaveLength(3) // I1: yıllık ödeme, bitişten sonra ufka (2028-01) kadar
     expect(d.kiraDonemleri).toHaveLength(1)
     expect(d.malikler).toHaveLength(1)
     expect(d.olaylar.some((o) => o.eylem === 'AKTIFLESTIR')).toBe(true)

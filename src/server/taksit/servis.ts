@@ -2,8 +2,8 @@ import { HESAP_SURUMU, type HesapSatiri, type TaksitGoruntusu } from '@/core/hes
 import { taksitTutari } from '@/core/hesap/taksit-tutari'
 import { formatTL, type Para } from '@/core/para'
 import { artisTarihleri, odemeDonemleri, vadeTarihi } from '@/core/takvim'
-import { ayEkle, formatTarih, karsilastir, type Tarih } from '@/core/tarih'
-import type { OdemePeriyodu } from '@/core/tipler'
+import { ayEkle, enBuyukTarih, formatTarih, karsilastir, type Tarih } from '@/core/tarih'
+import { tbk347KapsamindaMi, type OdemePeriyodu } from '@/core/tipler'
 import type { Tx } from '../db'
 import { dbTarih, jsonYaz, paraDb, paraYaz, tarihDb, tarihDbOpt } from '../donustur'
 import { CakismaHatasi, IsKuraliHatasi } from '../hata'
@@ -68,6 +68,11 @@ async function gecmisDegisikligiBildir(
 /**
  * Sözleşmenin NORMAL/KIST taksitlerini kira dönemlerinden yeniden üretir. İdempotenttir: yalnızca vadesi gelmemiş PLANLANDI taksitler
  * güncellenir/iptal edilir; ödeme sürecine girmiş ya da vadesi geçmiş (`vadesiGecmisMi`) taksitlere dokunulmaz.
+ *
+ * Plan sınırı: feshedilmiş sözleşmede fesih tarihi, diğerlerinde bitiş; belirsiz sürelide bugün + `TAKVIM_UFUK_AY`. TBK 347 kapsamındaki
+ * (konut, çatılı işyeri) yürürlükteki ve feshedilmemiş sözleşme bitişte kendiliğinden uzayacağından bitiş yok sayılır: plan bitişten
+ * (bitiş ufuktan uzaksa bitişten) ufka kadar son kira dönemi bedeliyle sürer, son dönem bitişte kıst kesilmez. Fesih, yenileme kesimi
+ * ya da sona erme bitişi bağlayıcı yapınca sonraki planlı satırlar iptal olur (vadesi geçmişler hariç).
  */
 export async function taksitPlaniniGuncelle(tx: Tx, sozlesmeId: number, bugun: Tarih): Promise<PlanOzeti> {
   const ozet: PlanOzeti = { ...BOS_PLAN_OZETI }
@@ -77,6 +82,7 @@ export async function taksitPlaniniGuncelle(tx: Tx, sozlesmeId: number, bugun: T
   const s = await tx.sozlesme.findUnique({
     where: { id: sozlesmeId },
     include: {
+      tasinmaz: { select: { tur: true } },
       kiraDonemleri: { orderBy: { baslangic: 'asc' } },
       taksitler: { where: { tur: { not: 'FARK' }, durum: { not: 'IPTAL' } } },
     },
@@ -86,8 +92,11 @@ export async function taksitPlaniniGuncelle(tx: Tx, sozlesmeId: number, bugun: T
   const periyot = s.odemePeriyoduAy as OdemePeriyodu
   const baslangic = tarihDb(s.baslangic)
   const ufuk = ayEkle(bugun, await parametreTamsayi('TAKVIM_UFUK_AY', bugun, tx))
-  const bitis = s.durum === 'FESHEDILDI' && s.fesihTarihi ? tarihDb(s.fesihTarihi) : tarihDbOpt(s.bitis)
-  const donemler = odemeDonemleri({ baslangic, bitis, periyotAy: periyot, ufuk })
+  const sozlesmeBitisi = tarihDbOpt(s.bitis)
+  const uzayacak = tbk347KapsamindaMi(s.tasinmaz.tur) && (s.durum === 'AKTIF' || s.durum === 'UZADI') && s.fesihTarihi === null
+  const bitis = s.durum === 'FESHEDILDI' && s.fesihTarihi ? tarihDb(s.fesihTarihi) : uzayacak ? null : sozlesmeBitisi
+  const planUfku = uzayacak && sozlesmeBitisi !== null ? enBuyukTarih(ufuk, sozlesmeBitisi) : ufuk
+  const donemler = odemeDonemleri({ baslangic, bitis, periyotAy: periyot, ufuk: planUfku })
   const kiraDonemleri = kiraDonemiGirdileri(s.kiraDonemleri)
   const sonKiraDonemi = kiraDonemleri.at(-1)?.baslangic ?? baslangic
   const sonrakiArtis = s.artisKurali === 'YOK'
