@@ -8,6 +8,7 @@ import { prisma } from '../db'
 import { tarihDb, tarihDbOpt } from '../donustur'
 import { BulunamadiHatasi } from '../hata'
 import { kisiGorunenAd } from '../kisi/servis'
+import { ilkDonemArtisBekliyorMu } from '../artis/servis'
 import { parametreOpsiyonel } from '../parametre/servis'
 import { tatilKumesi } from '../tatil/servis'
 
@@ -49,11 +50,12 @@ export async function sozlesmeDetayi(id: number, bugun: Tarih = bugunIstanbul())
   })
   if (!s) throw new BulunamadiHatasi('Sözleşme bulunamadı.')
   const vadeler = s.taksitler.map((x) => tarihDb(x.vadeTarihi)).sort()
-  const [belgeler, olaylar, tasarruf, tatiller] = await Promise.all([
+  const [belgeler, olaylar, tasarruf, tatiller, ilkDonemArtisBekliyor] = await Promise.all([
     belgeListesi('sozlesme', id),
     prisma.olayGunlugu.findMany({ where: { varlik: 'sozlesme', varlikId: String(id) }, orderBy: [{ zaman: 'desc' }, { id: 'desc' }], take: 200 }),
     parametreOpsiyonel('TASARRUF_GENELGESI_2024_7', bugun),
     vadeler.length === 0 ? new Set<string>() : tatilKumesi(vadeler[0]!, vadeler.at(-1)!),
+    ilkDonemArtisBekliyorMu(prisma, s, s.kiraDonemleri.at(-1)),
   ])
   const uyarilar: UyumUyarisi[] = uyumUyarilari({
     odemePeriyoduAy: s.odemePeriyoduAy, odemeZamani: s.odemeZamani, artisPeriyoduAy: s.artisPeriyoduAy, artisKurali: s.artisKurali,
@@ -70,6 +72,8 @@ export async function sozlesmeDetayi(id: number, bugun: Tarih = bugunIstanbul())
     belgeler, olaylar, uyarilar,
     // Vadesi iş günü olmayan taksitler: sözleşmesel vade kaydırılmaz, "tatile denk geliyor" etiketiyle gösterilir (spec §7.2).
     tatileDenkTaksitIdleri: s.taksitler.filter((x) => !isGunuMu(tarihDb(x.vadeTarihi), tatiller)).map((x) => x.id),
+    /** Yenilemenin ilk gün artışı bekleniyor (I3/N1; hesapla aynı yüklem): o tarihli artış son dönemle aynı günde olsa da onaylanabilir. */
+    ilkDonemArtisBekliyor,
   }
 }
 

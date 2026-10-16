@@ -270,6 +270,45 @@ describe('I3 + I8: var olan kira döneminin bedeli değişir', () => {
     expect([a.eskiBedel.toFixed(2), a.yeniBedel?.toFixed(2)]).toEqual(['10000.00', '13120.00'])
   })
 
+  /** Kira yılı sınırında başlayan yenileme; taslağın bedeli yeniden pazarlıkla 12.500 olarak değiştirilmiş (önceki sözleşmede 10.000). */
+  async function pazarlikliYenileme() {
+    const eski = await sozlesme({ baslangic: '2025-11-01', bitis: '2026-10-31' })
+    const yeni = await sozlesmeYenile(eski, TEST_BAGLAMI)
+    await prisma.sozlesme.update({ where: { id: yeni }, data: { bedelTutari: '12500.00' } })
+    await sozlesmeAktiflestir(yeni, 0, TEST_BAGLAMI, BUGUN)
+    return { eski, yeni }
+  }
+
+  it('N1: bedeli yeniden pazarlık edilmiş yenilemede ilk gün artışı açılmaz, hatırlatılmaz; ertesi yılın artışı zamanı gelince hesaplanır', async () => {
+    const { yeni } = await pazarlikliYenileme()
+    await tufe12Gir(10, '31.20')
+    expect(await hesapla()).toEqual({ hesaplanan: 0, bekleyen: 0 })
+    expect(await prisma.artisHesabi.count({ where: { sozlesmeId: yeni } })).toBe(0)
+    expect(await h5(yeni, BUGUN)).toEqual([])
+    expect((await donemler(yeni)).map((k) => [k.kaynak, k.bedelTutari.toFixed(2)])).toEqual([['ILK', '12500.00']])
+    // Ertesi yılın artışı (2027-11-01) bekleyen bir ilk gün artışına takılmadan hesaplanır (bitiş sonrası artış hesaplanmadığından süre uzatılır).
+    await prisma.sozlesme.update({ where: { id: yeni }, data: { bitis: new Date('2028-10-31') } })
+    expect(await prisma.$transaction((tx) => artislariHesapla(tx, t('2027-10-01')))).toEqual({ hesaplanan: 0, bekleyen: 1 })
+    const a = await prisma.artisHesabi.findFirstOrThrow({ where: { sozlesmeId: yeni } })
+    expect([iso(a.donemBaslangic), a.durum, a.eskiBedel.toFixed(2)]).toEqual(['2027-11-01', 'BEKLEMEDE', '12500.00'])
+    // Bedel değişikliği de ilk gün artışına takılmaz (I4).
+    await kiraBedeliDegistir(yeni, await surum(yeni), { baslangic: t('2027-01-01'), bedel: para('13000'), kaynak: 'ANLASMA', aciklama: 'Ek protokol' }, TEST_BAGLAMI, BUGUN)
+    expect(await prisma.kiraDonemi.count({ where: { sozlesmeId: yeni } })).toBe(2)
+  })
+
+  it('N1: daha önce açılmış ilk gün artışı satırı (bedel farklı) kendiliğinden kalır ama hiçbir şeyi engellemez ve anlaşılan bedeli ezemez', async () => {
+    const { yeni } = await pazarlikliYenileme()
+    const sarkan = await prisma.artisHesabi.create({
+      data: { sozlesmeId: yeni, donemBaslangic: new Date('2026-11-01'), referansYil: 2026, referansAy: 10, eskiBedel: '10000.00', yeniBedel: '13120.00', gerekce: {}, durum: 'HESAPLANDI' },
+    })
+    expect(await h5(yeni, BUGUN)).toEqual([])
+    await expect(artisOnayla(sarkan.id, sarkan.version, TEST_BAGLAMI, BUGUN)).rejects.toMatchObject({ kod: 'SIRA' })
+    expect((await donemler(yeni)).map((k) => [k.kaynak, k.bedelTutari.toFixed(2)])).toEqual([['ILK', '12500.00']])
+    await prisma.sozlesme.update({ where: { id: yeni }, data: { bitis: new Date('2028-10-31') } })
+    expect(await prisma.$transaction((tx) => artislariHesapla(tx, t('2027-10-01')))).toEqual({ hesaplanan: 0, bekleyen: 1 })
+    expect((await prisma.artisHesabi.findUniqueOrThrow({ where: { id: sarkan.id } })).durum).toBe('HESAPLANDI')
+  })
+
   it('I8: onaylı artışın başlangıcından işleyen tespit o dönemin bedelini değiştirir; tahakkuk etmiş taksitler FARK alır', async () => {
     const id = await sozlesme()
     const kasim = await taksit(id, '2026-11')

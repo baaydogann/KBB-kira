@@ -55,7 +55,7 @@ export async function hatirlatmaVerisiYukle(tx: Tx, bugun: Tarih): Promise<Hatir
   const pdfVar = new Set(pdfler.map((p) => p.sahipId))
   return {
     bugun, tatiller, ayarlar,
-    sozlesmeler: sozlesmeler.flatMap((s) => {
+    sozlesmeler: (await Promise.all(sozlesmeler.map(async (s) => {
       const yururluk = artisIcinYururluk(s, bugun)
       if (yururluk === null) return []
       const eksikler: EksikVeri[] = []
@@ -74,9 +74,9 @@ export async function hatirlatmaVerisiYukle(tx: Tx, bugun: Tarih): Promise<Hatir
         baslangic, bitis: tarihDbOpt(s.bitis), ilkKiraBaslangici: tarihDb(s.ilkKiraBaslangici),
         sonKiraDonemiBaslangici: s.kiraDonemleri[0] ? tarihDb(s.kiraDonemleri[0].baslangic) : baslangic,
         uzamaSayisi: s.uzamaSayisi, artisKurali: s.artisKurali, artisPeriyoduAy: s.artisPeriyoduAy, eksikler,
-        sonaErmekte: yururluk.sonaErmekte, bitisEtkin: yururluk.bitisEtkin, ilkDonemArtisBekliyor: ilkDonemArtisBekliyorMu(s, s.kiraDonemleri[0]),
+        sonaErmekte: yururluk.sonaErmekte, bitisEtkin: yururluk.bitisEtkin, ilkDonemArtisBekliyor: await ilkDonemArtisBekliyorMu(tx, s, s.kiraDonemleri[0]),
       }]
-    }),
+    }))).flat(),
     planliTaksitler: taksitler.map((x) => ({
       id: String(x.id), sozlesmeId: String(x.sozlesmeId), sozlesmeNo: x.sozlesme.sozlesmeNo, kisaAd: x.sozlesme.tasinmaz.kisaAd,
       vade: tarihDb(x.vadeTarihi), tutar: x.tutar.toFixed(2),

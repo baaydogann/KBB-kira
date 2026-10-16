@@ -1,6 +1,6 @@
 import type { HesapSatiri } from '@/core/hesap/goruntu'
 import { ayAdi, bugunIstanbul } from '@/core/tarih'
-import { artisIcinYururluk, ilkDonemArtisBekliyorMu } from '@/server/artis/servis'
+import { artisIcinYururluk } from '@/server/artis/servis'
 import { tarihDbOpt } from '@/server/donustur'
 import type { SozlesmeDetayi } from '@/server/sozlesme/sorgu'
 import { Kart } from '@/components/ui/kart'
@@ -28,7 +28,7 @@ export function DonemlerSekmesi({ s, ufukGun }: { s: SozlesmeDetayi; ufukGun: nu
   // ayarlanmamış ILK dönemi kendi başlangıcındaki artışla onaylanır (dönemin bedeli değişir).
   const sonKd = s.kiraDonemleri.at(-1)
   const sonKiraBaslangici = sonKd?.baslangic.getTime() ?? 0
-  const ilkDonemArtisi = ilkDonemArtisBekliyorMu(s, sonKd)
+  const ilkDonemArtisi = s.ilkDonemArtisBekliyor
   const bedelAlanlari: EylemAlani[] = [
     { ad: 'baslangic', etiket: 'Başlangıç', tur: 'date', zorunlu: true },
     { ad: 'bedel', etiket: 'Yeni bedel', ondalik: true, zorunlu: true, ipucu: s.bedelTabani === 'AYLIK' ? 'Aylık bedel' : 'Yıllık bedel' },
