@@ -5,8 +5,14 @@ import { TUFE12 } from './tufe12'
 
 const gun = (s: string) => new Date(`${s}T00:00:00.000Z`)
 
-/** İdempotent: mevcut kayıtlar (yönetici düzenlemeleri) ezilmez. */
-export async function seedVerisiniYukle(db: PrismaClient): Promise<void> {
+/**
+ * İdempotent, "yoksa oluştur": mevcut kayıtlar (yönetici düzenlemeleri, onaylanmış endeksler) ezilmez, onaylı değer onay beklemeye dönmez.
+ *
+ * TÜFE12 değerleri varsayılan olarak onay bekleyen (`BEKLIYOR`, kaynak ELLE, EVDS değeri yok) yüklenir: değerlerin bir kısmı endeks
+ * düzeylerinden yeniden hesaplanmıştır; kullanıcı TÜİK bülteniyle karşılaştırıp onaylamadan hiçbir hesapta kullanılmaz (spec §8) ve
+ * H4 hatırlatmasıyla listelenir. `tufeOnayli` yalnızca testler ve e2e kurulumu içindir: değerleri onaylı yükler.
+ */
+export async function seedVerisiniYukle(db: PrismaClient, secenek: { tufeOnayli?: boolean } = {}): Promise<void> {
   for (const p of PARAMETRELER) {
     await db.parametre.upsert({
       where: { anahtar_yururlukBaslangic: { anahtar: p.anahtar, yururlukBaslangic: gun(p.yururlukBaslangic) } },
@@ -26,7 +32,10 @@ export async function seedVerisiniYukle(db: PrismaClient): Promise<void> {
     await db.endeksDegeri.upsert({
       where: { seri_yil_ay: { seri: 'TUFE_12AY_ORT', yil, ay } },
       update: {},
-      create: { seri: 'TUFE_12AY_ORT', yil, ay, deger, kaynak: 'ELLE', onayDurumu: 'ONAYLANDI', onayZamani: new Date() },
+      create: {
+        seri: 'TUFE_12AY_ORT', yil, ay, deger, kaynak: 'ELLE', evdsDegeri: null,
+        ...(secenek.tufeOnayli === true ? { onayDurumu: 'ONAYLANDI' as const, onayZamani: new Date() } : { onayDurumu: 'BEKLIYOR' as const }),
+      },
     })
   }
 }

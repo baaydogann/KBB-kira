@@ -1,7 +1,7 @@
 /**
  * TÜFE 12 aylık ortalamalara göre değişim (%). Kaynak: docs/arastirma/02 §6.
  * Değerlerin bir kısmı yayımlanmış TÜİK değeri değil, endeks düzeylerinden yeniden hesaplanmıştır (±0,01 fark olabilir).
- * Üretim kullanımından önce TÜİK bültenleriyle karşılaştırılmalıdır.
+ * Üretim kullanımından önce TÜİK bültenleriyle karşılaştırılmalıdır: tohum bu yüzden onay bekleyen olarak yükler (Endeksler ekranında onaylanır).
  */
 export const TUFE12: Record<string, string> = {
   '2024-10': '62.02', '2024-11': '60.45', '2024-12': '58.51',

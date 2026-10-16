@@ -45,7 +45,7 @@ beforeEach(async () => {
   depo.get.mockReset()
   vi.mocked(revalidatePath).mockClear()
   await temizle()
-  await seedVerisiniYukle(prisma)
+  await seedVerisiniYukle(prisma, { tufeOnayli: true })
 })
 afterEach(() => vi.restoreAllMocks())
 afterAll(() => prisma.$disconnect())

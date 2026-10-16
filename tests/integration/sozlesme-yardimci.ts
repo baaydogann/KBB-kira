@@ -14,7 +14,7 @@ export interface Hazirlik {
 }
 
 export async function hazirlik(): Promise<Hazirlik> {
-  await seedVerisiniYukle(prisma)
+  await seedVerisiniYukle(prisma, { tufeOnayli: true })
   const birim = await ornekBirim()
   const tasinmaz = await ornekTasinmaz({ kullananBirimId: birim.id })
   const arsa = await ornekTasinmaz({ tur: 'ARSA', kullanimAmaci: 'DIGER' })

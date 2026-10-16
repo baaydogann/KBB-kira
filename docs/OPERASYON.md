@@ -24,6 +24,7 @@
    - Seed "yoksa oluştur" biçimindedir (`update: {}`): var olan kayıtları ezmez, yöneticinin tohum satırları üzerindeki düzenlemeleri korunur. Ancak yöneticinin sildiği ya da yürürlük başlangıç tarihini değiştirdiği bir tohum parametresi veya tatil satırı bir sonraki `up -d` çağrısında yeniden oluşturulur. Bir parametre değerinin artık istenmemesi gerekiyorsa satırı silmek yerine yürürlük bitişi vererek geçerliliğini sonlandırın; tatillerde yeniden eklenmesi kabul edilmelidir.
 4. İlk kullanıcıyı oluşturun: `docker compose exec web node_modules/.bin/tsx scripts/kullanici-olustur.ts --kullanici-adi <ad> --ad-soyad "<Ad Soyad>"`. Geçici şifre bir kez yazdırılır.
 5. Uygulamada sırasıyla şunları yapın:
+   - Endeksler: tohum verisiyle gelen 24 TÜFE12 değeri (2024-10 – 2026-09) **onay bekler**. Her birini TÜİK bülteniyle karşılaştırıp onaylayın; farklıysa resmi değeri girerek onaylayın. Onaylanana kadar bu aylara bağlı artış hesapları `BEKLEMEDE` kalır ve Pano'da H4 hatırlatmaları listelenir.
    - Yönetim → Parametreler: `EVDS_SERI_YIUFE` seri kodunu EVDS seri listesinden doğrulayın (spec §21-10).
    - Birimler ve taşınmazları girin, ardından malikleri ekleyin.
 

@@ -26,7 +26,7 @@ export default async function EndekslerSayfasi() {
             {bekleyen.length === 0 ? <p className="text-sm text-slate-600">Onay bekleyen endeks yok.</p> : bekleyen.map((e) => (
               <div key={e.id} className="rounded border border-slate-200 p-3">
                 <p className="mb-2 text-sm">
-                  <strong>{SERI_ADI[e.seri]}</strong> — {ayAdi({ yil: e.yil, ay: e.ay })}: EVDS hesabı <strong><OranMetni deger={e.deger.toString()} /></strong> ({e.evdsSeriKodu})
+                  <strong>{SERI_ADI[e.seri]}</strong> — {ayAdi({ yil: e.yil, ay: e.ay })}: {e.kaynak === 'EVDS' ? 'EVDS hesabı' : 'İlk kurulum değeri'} <strong><OranMetni deger={e.deger.toString()} /></strong>{e.evdsSeriKodu ? ` (${e.evdsSeriKodu})` : null}
                 </p>
                 <OnayFormu id={e.id} deger={e.deger.toString()} />
               </div>

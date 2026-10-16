@@ -11,7 +11,7 @@ export default async function kurulum(): Promise<void> {
   // Yıkıcı olmayan şema kurulumu (controller kararı, Task 12): migrate reset yerine deploy + tablo boşaltma.
   execSync('pnpm prisma migrate deploy', { stdio: 'inherit', env: process.env })
   await temizle()
-  await seedVerisiniYukle(prisma)
+  await seedVerisiniYukle(prisma, { tufeOnayli: true })
   await prisma.kullanici.create({ data: { kullaniciAdi: E2E_KULLANICI.kullaniciAdi, adSoyad: 'E2E Kullanıcı', sifreHash: await sifreHashle(E2E_KULLANICI.sifre), sifreDegismeli: false } })
   const birim = await prisma.birim.create({ data: { ad: 'Emlak ve İstimlak Dairesi', kurumsalKod: '46.01.33.01', fonksiyonelKod: '01.3.9.00' } })
   await prisma.tasinmaz.create({ data: { tur: 'ISYERI', kisaAd: 'Meram hizmet binası', adres: 'Meram', ilce: 'Meram', kullanimAmaci: 'HIZMET_BINASI', kullananBirimId: birim.id } })

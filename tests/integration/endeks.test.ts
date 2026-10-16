@@ -96,7 +96,7 @@ async function kilitBeklemesiniBekle(): Promise<void> {
 
 beforeEach(async () => {
   await temizle()
-  await seedVerisiniYukle(prisma)
+  await seedVerisiniYukle(prisma, { tufeOnayli: true })
   await prisma.endeksDegeri.deleteMany()
 })
 afterAll(() => prisma.$disconnect())

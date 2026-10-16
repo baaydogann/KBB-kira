@@ -6,6 +6,10 @@ import {
   statuKurallari, varsayilanEkonomikKod, vergiOranlari,
 } from '@/server/parametre/servis'
 import { tatilKumesi } from '@/server/tatil/servis'
+import { hatirlatmalariUret } from '@/core/hatirlatma'
+import { onayliOranlariYukle } from '@/server/endeks/oranlar'
+import { endeksOnayla } from '@/server/endeks/servis'
+import { hatirlatmaVerisiYukle } from '@/server/hatirlatma/servis'
 import { IsKuraliHatasi } from '@/server/hata'
 import { seedVerisiniYukle } from '../../prisma/seed-veri'
 import { PARAMETRELER } from '../../prisma/seed-veri/parametreler'
@@ -13,9 +17,37 @@ import { TEST_BAGLAMI, temizle } from './yardimci'
 
 beforeEach(async () => {
   await temizle()
-  await seedVerisiniYukle(prisma)
+  await seedVerisiniYukle(prisma, { tufeOnayli: true })
 })
 afterAll(() => prisma.$disconnect())
+
+describe('I9: TÜFE12 tohumu onay bekler', () => {
+  const tufe = () => prisma.endeksDegeri.findMany({ where: { seri: 'TUFE_12AY_ORT' }, orderBy: [{ yil: 'asc' }, { ay: 'asc' }] })
+
+  it('varsayılan tohum 24 TÜFE12 değerini onay bekleyen (ELLE, EVDS değeri boş) yükler; onaylanmadan hesapta kullanılmaz, H4 ile listelenir', async () => {
+    await temizle()
+    await seedVerisiniYukle(prisma)
+    const satirlar = await tufe()
+    expect(satirlar).toHaveLength(24)
+    expect(satirlar.every((e) => e.onayDurumu === 'BEKLIYOR' && e.kaynak === 'ELLE' && e.evdsDegeri === null && e.onayZamani === null)).toBe(true)
+    expect((await onayliOranlariYukle()).sonOnayliTufe12).toBeNull()
+    const adaylar = hatirlatmalariUret(await prisma.$transaction((tx) => hatirlatmaVerisiYukle(tx, t('2026-10-15'))))
+    expect(adaylar.filter((x) => x.kural === 'H4')).toHaveLength(24)
+  })
+
+  it('tohum yalnızca eksikleri oluşturur: onaylanmış değer yeniden tohumlamada onay beklemeye dönmez; tufeOnayli seçeneği onaylı yükler', async () => {
+    await temizle()
+    await seedVerisiniYukle(prisma)
+    const [ilk] = await tufe()
+    await endeksOnayla(ilk!.id, null, TEST_BAGLAMI)
+    await seedVerisiniYukle(prisma)
+    const sonra = await tufe()
+    expect([sonra.length, sonra.filter((e) => e.onayDurumu === 'ONAYLANDI').map((e) => e.id)]).toEqual([24, [ilk!.id]])
+    await temizle()
+    await seedVerisiniYukle(prisma, { tufeOnayli: true })
+    expect((await tufe()).every((e) => e.onayDurumu === 'ONAYLANDI' && e.onayZamani !== null)).toBe(true)
+  })
+})
 
 describe('parametre servisi', () => {
   it('tarihe göre doğru yürürlük kaydını seçer', async () => {
@@ -28,7 +60,7 @@ describe('parametre servisi', () => {
 
   it('seed idempotenttir', async () => {
     const once = await prisma.parametre.count()
-    await seedVerisiniYukle(prisma)
+    await seedVerisiniYukle(prisma, { tufeOnayli: true })
     expect(await prisma.parametre.count()).toBe(once)
   })
 
