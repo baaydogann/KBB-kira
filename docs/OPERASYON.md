@@ -4,7 +4,7 @@
 1. Sunucu hazırlığı:
    - Docker ve Docker Compose kurulu olmalı. Yeniden başlatmada konteynerlerin geri gelmesi için `systemctl enable docker`.
    - Günlük dosyalarının diski doldurmaması için `/etc/docker/daemon.json` içine `{"log-driver": "json-file", "log-opts": {"max-size": "10m", "max-file": "5"}}` yazıp `systemctl restart docker` çalıştırın.
-   - Sunucunun `evds3.tcmb.gov.tr` adresine **doğrudan** HTTPS çıkışı olmalı (güvenlik duvarı kuralı). Worker `HTTP_PROXY`/`HTTPS_PROXY` ortam değişkenlerini kullanmaz (Node `fetch` bunları yok sayar); çıkış bir HTTP vekili üzerinden verilemez.
+   - Sunucunun `evds3.tcmb.gov.tr` adresine **doğrudan** HTTPS çıkışı olmalı (güvenlik duvarı kuralı). Node `fetch` varsayılan olarak `HTTP_PROXY`/`HTTPS_PROXY` ortam değişkenlerini yok sayar; bu yüzden vekil tanımlamak çıkışı vekile yönlendirmez. Vekil kaçınılmazsa worker'ın ortamına `NODE_USE_ENV_PROXY=1` ekleyin (Node 22.21+/24: `fetch` o zaman `HTTPS_PROXY`'yi dikkate alır); ayarı bir kez deneyip EVDS'e erişimi doğrulayın (Yönetim → Zamanlanmış işler → `endeks-cek` → "Şimdi çalıştır").
 2. `.env` dosyasını oluşturun ve `chmod 600 .env` ile yalnızca sahibine açın:
    ```
    POSTGRES_PASSWORD=<openssl rand -hex 24 çıktısı>
@@ -20,7 +20,8 @@
 3. İmajı hazırlayın ve başlatın:
    - Kaynaktan: `docker compose build`, sonra `docker compose up -d`. İmaj adı `KBB_KIRA_IMAJ` değişkeninden gelir; tanımlı değilse `kbb-kira:latest` kullanılır (yerelde üretilen imaj).
    - Registry'den (GitLab CI `imaj` işinin ittiği imaj): `.env` içine `KBB_KIRA_IMAJ=<registry>/<grup>/<proje>:latest` ekleyin (CI'daki `$CI_REGISTRY_IMAGE` adresi). Sunucuda bir kez `docker login <registry>` çalıştırın; kullanıcı olarak yalnızca `read_registry` yetkili bir dağıtım jetonu kullanın. Kimlik bilgisi `~/.docker/config.json` içine yazılır; bu dosya yalnızca root tarafından okunabilmelidir. Sonra `docker compose pull && docker compose up -d`.
-   - `migrate` servisi çalıştığında (ilk kurulum ve imaj güncellemesinde konteyner yeniden oluşturulunca) önce migrasyonları, sonra tohum verisini (seed) çalıştırır. Seed idempotenttir: var olan kayıtları ezmez, yöneticinin parametre/tatil düzenlemeleri korunur.
+   - `migrate` servisi tek seferlik bir işidir ve web/worker ona bağlıdır; her `docker compose up -d` çağrısında yeniden çalışır: önce migrasyonları, sonra tohum verisini (seed) uygular.
+   - Seed "yoksa oluştur" biçimindedir (`update: {}`): var olan kayıtları ezmez, yöneticinin tohum satırları üzerindeki düzenlemeleri korunur. Ancak yöneticinin sildiği ya da yürürlük başlangıç tarihini değiştirdiği bir tohum parametresi veya tatil satırı bir sonraki `up -d` çağrısında yeniden oluşturulur. Bir parametre değerinin artık istenmemesi gerekiyorsa satırı silmek yerine yürürlük bitişi vererek geçerliliğini sonlandırın; tatillerde yeniden eklenmesi kabul edilmelidir.
 4. İlk kullanıcıyı oluşturun: `docker compose exec web node_modules/.bin/tsx scripts/kullanici-olustur.ts --kullanici-adi <ad> --ad-soyad "<Ad Soyad>"`. Geçici şifre bir kez yazdırılır.
 5. Uygulamada sırasıyla şunları yapın:
    - Yönetim → Parametreler: `EVDS_SERI_YIUFE` seri kodunu EVDS seri listesinden doğrulayın (spec §21-10).
@@ -121,7 +122,7 @@ Belge volume'unun adı komutta yazılı değildir: `--volumes-from` web konteyne
 
 ## Sorun giderme
 - **Panoda "son 26 saatte çalışmadı" bandı:** Önce `docker compose ps` ile worker'ın `running` durumda olduğuna bakın (worker'ın healthcheck'i yoktur; `Restarting` görünüyorsa `docker compose logs worker --tail 200` hatayı gösterir). Sonra Yönetim → Zamanlanmış işler → "Şimdi çalıştır".
-- **"EVDS'e ulaşılamadı":** Anahtar ve ağ çıkışını kontrol edin (çıkış doğrudan olmalı, vekil kullanılamaz). Bu sürede Endeksler ekranından TÜİK bülteniyle elle giriş yapın.
+- **"EVDS'e ulaşılamadı":** Anahtar ve ağ çıkışını kontrol edin (çıkış tercihen doğrudan olmalı; vekil için bkz. İlk kurulum, adım 1). Bu sürede Endeksler ekranından TÜİK bülteniyle elle giriş yapın.
 - **Parametre yürürlüğü bitti (H13):** Yönetim → Parametreler'den yeni yürürlük kaydı ekleyin. Örnek: 2027 `DAMGA_AZAMI`. Tatil takvimi için bkz. "Tatil takvimi".
 - **Formlar giriş yapıldığı halde "gönderilemedi" diyor / eylemler reddediliyor:** Vekilin özgün `Host` (ya da `X-Forwarded-Host`) başlığını ilettiğini denetleyin (bkz. Ters vekil).
 - **Worker açılışta kapanıyor ("SESSION_SECRET en az 32 karakter olmalı"):** Worker'ın `.env`'de `SESSION_SECRET` aldığından emin olun.
