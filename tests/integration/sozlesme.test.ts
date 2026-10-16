@@ -426,8 +426,9 @@ describe('denetim özeti ve yenileme zinciri', () => {
     const sonra = async (varlikId: number, eylem: string) =>
       (await prisma.olayGunlugu.findFirstOrThrow({ where: { varlik: 'sozlesme', varlikId: String(varlikId), eylem } })).sonra
     // I1: işyeri planları ufka (2028-01) kadar sürer; kesim sonrası tüm planlı satırlar iptal olur.
-    expect(await sonra(eskiId, 'AKTIFLESTIR')).toEqual({ durum: 'AKTIF', plan: { eklenen: 25, guncellenen: 0, iptal: 0, gecmisDokunulmadi: 0 } })
-    expect(await sonra(yeniId, 'AKTIFLESTIR')).toEqual({ durum: 'AKTIF', plan: { eklenen: 19, guncellenen: 0, iptal: 0, gecmisDokunulmadi: 0 } })
+    // F2: aktifleştirme ILK damga kaydını da açar; kimliği denetim satırına yazılır.
+    expect(await sonra(eskiId, 'AKTIFLESTIR')).toEqual({ durum: 'AKTIF', plan: { eklenen: 25, guncellenen: 0, iptal: 0, gecmisDokunulmadi: 0 }, damgaKaydiId: expect.any(Number) })
+    expect(await sonra(yeniId, 'AKTIFLESTIR')).toEqual({ durum: 'AKTIF', plan: { eklenen: 19, guncellenen: 0, iptal: 0, gecmisDokunulmadi: 0 }, damgaKaydiId: expect.any(Number) })
     // Yeni sözleşmenin dönemlerine düşen 19 planlı taksit plandan önce devredilir (iptal); plan ayrıca iptal etmez.
     const devredilen = (await prisma.taksit.findMany({ where: { sozlesmeId: eskiId, donemBaslangic: { gte: new Date('2026-07-01') } }, orderBy: { donemBaslangic: 'asc' } })).map((x) => x.id)
     expect(devredilen).toHaveLength(19)

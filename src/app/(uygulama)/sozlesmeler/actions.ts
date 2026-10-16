@@ -16,6 +16,8 @@ import { kayitSonrasiHataMi, taslakKaydetVeBagla } from '@/server/sozlesme/kayde
 import { malikGirdisiSemasi, sozlesmeGirdisiSemasi } from '@/server/sozlesme/sema'
 import { sozlesmeAktiflestir, sozlesmeOnizle, type OnizlemeCiktisi } from '@/server/sozlesme/servis'
 import { belirsizSureliyeCevir, malikleriDegistir, sozlesmeFeshet, sozlesmeSonlandir, sozlesmeYenile, taslakSil } from '@/server/sozlesme/yasam-dongusu'
+import { damgaKaydiSemasi } from '@/server/damga/sema'
+import { damgaKaydiEkle, damgaKaydiIptal, damgaMakbuzBagla } from '@/server/damga/servis'
 import { basariDurumu, formDegerleri, formKimligi, formMetni, formSurum, hataDurumu, uyariIle, type FormDurumu } from '@/app/_lib/form'
 
 // İstemci bileşenlerinden gelen kimlikler FormData değil argümandır; yine de güvenilmez girdidir: PostgreSQL INTEGER aralığında doğrulanır.
@@ -268,4 +270,52 @@ export async function kiraBedeliDegistirAction(_: FormDurumu, f: FormData): Prom
   const durum = await basariVeTazele('Kira bedeli değişikliği kaydedildi.')
   yenile(sozlesmeId)
   return durum
+}
+
+/** Damga sekmesi eylemleri: kayıt kimliği, sürüm ve sözleşme kimliği formdan gelir; H10 ve DAMGA_HATA için hatırlatmalar tazelenir. */
+async function damgaEylemi(f: FormData, basari: string, calistir: (baglam: IslemBaglami) => Promise<void>): Promise<FormDurumu> {
+  const k = await kullaniciGerekli()
+  const sozlesmeId = formKimligi(f, 'sozlesmeId')
+  if (sozlesmeId === null) return { hata: 'Sözleşme kimliği geçersiz; sayfayı yenileyip tekrar deneyin.', alanHatalari: {}, tamam: false }
+  try {
+    await calistir(await islemBaglami(k))
+  } catch (e) {
+    return hataDurumu(e, f)
+  }
+  const durum = await basariVeTazele(basari)
+  yenile(sozlesmeId)
+  return durum
+}
+
+function damgaKimligi(f: FormData): { id: number; version: number } {
+  const id = formKimligi(f, 'id')
+  const version = formSurum(f)
+  if (id === null || version === undefined) throw new IsKuraliHatasi('ID', 'Damga kaydı kimliği geçersiz; sayfayı yenileyip tekrar deneyin.')
+  return { id, version }
+}
+
+export async function damgaKaydiEkleAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
+  return damgaEylemi(f, 'Damga kaydı eklendi.', async (baglam) => {
+    const g = damgaKaydiSemasi.parse({
+      sozlesmeId: formKimligi(f, 'sozlesmeId'), olay: formMetni(f, 'olay'), olayTarihi: formMetni(f, 'olayTarihi'),
+      matrah: formMetni(f, 'matrah') || null, tahsil: formMetni(f, 'tahsil'),
+    })
+    await damgaKaydiEkle(g, baglam)
+  })
+}
+
+export async function damgaMakbuzBaglaAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
+  return damgaEylemi(f, 'Makbuz bağlandı.', async (baglam) => {
+    const { id, version } = damgaKimligi(f)
+    const belgeId = formKimligi(f, 'belgeId')
+    if (belgeId === null) throw new IsKuraliHatasi('BELGE', 'Makbuz seçin.', 'belgeId')
+    await damgaMakbuzBagla(id, version, belgeId, baglam)
+  })
+}
+
+export async function damgaKaydiIptalAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
+  return damgaEylemi(f, 'Damga kaydı iptal edildi.', async (baglam) => {
+    const { id, version } = damgaKimligi(f)
+    await damgaKaydiIptal(id, version, formMetni(f, 'neden'), baglam)
+  })
 }

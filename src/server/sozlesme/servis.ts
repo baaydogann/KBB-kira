@@ -13,6 +13,7 @@ import { BulunamadiHatasi, CakismaHatasi, IsKuraliHatasi, benzersizIhlaliMi } fr
 import { kisiGorunenAd } from '../kisi/servis'
 import { varsayilanEkonomikKod, vergiOranlari } from '../parametre/servis'
 import { fazlaOdemeHatirlat, taksitPlaniniGuncelle, vadesiGecmisMi } from '../taksit/servis'
+import { damgaIlkKaydiOlustur } from '../damga/servis'
 import type { MalikGirdisi, SozlesmeGirdisi } from './sema'
 
 function sozlesmeVerisi(g: SozlesmeGirdisi, ekonomikKod: string) {
@@ -313,6 +314,7 @@ export async function sozlesmeAktiflestir(id: number, version: number, baglam: I
       await oncekiSozlesmeyiKapat(tx, s.oncekiSozlesmeId, { baslangic: bas, ilkKiraBaslangici: tarihDb(s.ilkKiraBaslangici), sozlesmeNo: s.sozlesmeNo }, baglam, bugun)
     }
     const plan = await taksitPlaniniGuncelle(tx, id, bugun)
-    await denetimKaydi(tx, baglam, { varlik: 'sozlesme', varlikId: id, eylem: 'AKTIFLESTIR', sonra: { durum: 'AKTIF', plan } })
+    const damgaKaydiId = await damgaIlkKaydiOlustur(tx, id, baglam, bugun)
+    await denetimKaydi(tx, baglam, { varlik: 'sozlesme', varlikId: id, eylem: 'AKTIFLESTIR', sonra: { durum: 'AKTIF', plan, damgaKaydiId } })
   }, { timeout: 60_000 })
 }

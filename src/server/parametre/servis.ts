@@ -54,7 +54,7 @@ export const TAMSAYI_PARAMETRELERI: ReadonlySet<string> = new Set([
   'TBK347_FESIH_BILDIRIM_GUN', 'HATIRLATMA_FESIH_SON_GUN_GORUNUR_GUN', 'HATIRLATMA_TESPIT_ONCE_AY',
   'HATIRLATMA_UZAMA10_ONCE_AY', 'HATIRLATMA_MEVZUAT_ONCE_GUN',
   'TAKVIM_UFUK_AY', 'ARTIS_HESAP_UFUK_GUN', 'FARK_VADE_GUN',
-  'SURE_22A_GECERLILIK_GUN',
+  'SURE_22A_GECERLILIK_GUN', 'DAMGA_SURESIZ_AY',
 ])
 
 export async function hatirlatmaAyarlari(tarih: Tarih, db: Tx = prisma): Promise<HatirlatmaAyarlari> {

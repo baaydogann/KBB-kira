@@ -6,7 +6,8 @@ import { Secim } from './ui/alan'
 
 const TURLER: [string, string][] = [
   ['SOZLESME', 'Sözleşme'], ['TAPU', 'Tapu'], ['ONAY_BELGESI', 'Onay belgesi'], ['PIYASA_ARASTIRMA', 'Piyasa araştırma tutanağı'],
-  ['EK_PROTOKOL', 'Ek protokol'], ['MAHKEME_KARARI', 'Mahkeme kararı'], ['DIGER', 'Diğer'],
+  ['EK_PROTOKOL', 'Ek protokol'], ['MAHKEME_KARARI', 'Mahkeme kararı'], ['BORC_YAZISI', 'Borç yazısı (22/A)'], ['FATURA', 'Fatura'],
+  ['DAMGA_MAKBUZU', 'Damga makbuzu'], ['DIGER', 'Diğer'],
 ]
 
 export function BelgeYukle({ sahipTur, sahipId, belgeTuru, tamam }: { sahipTur: 'sozlesme' | 'tasinmaz' | 'kisi' | 'gecici'; sahipId: number; belgeTuru?: string; tamam?: (id: number) => void }) {

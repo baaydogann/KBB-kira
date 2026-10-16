@@ -18,12 +18,14 @@ import { MaliklerSekmesi } from './sekmeler/malikler'
 import { DonemlerSekmesi } from './sekmeler/donemler'
 import { TaksitlerSekmesi } from './sekmeler/taksitler'
 import { BelgelerSekmesi } from './sekmeler/belgeler'
+import { DamgaSekmesi } from './sekmeler/damga'
 import { GecmisSekmesi } from './sekmeler/gecmis'
 import { HatirlatmalarSekmesi } from './sekmeler/hatirlatmalar'
 
 const SEKMELER = [
   { anahtar: 'genel', etiket: 'Genel' }, { anahtar: 'malikler', etiket: 'Malikler' }, { anahtar: 'donemler', etiket: 'Kira dönemleri ve artışlar' },
-  { anahtar: 'taksitler', etiket: 'Taksitler' }, { anahtar: 'belgeler', etiket: 'Belgeler' }, { anahtar: 'hatirlatmalar', etiket: 'Hatırlatmalar' }, { anahtar: 'gecmis', etiket: 'Geçmiş' },
+  { anahtar: 'taksitler', etiket: 'Taksitler' }, { anahtar: 'damga', etiket: 'Damga' }, { anahtar: 'belgeler', etiket: 'Belgeler' },
+  { anahtar: 'hatirlatmalar', etiket: 'Hatırlatmalar' }, { anahtar: 'gecmis', etiket: 'Geçmiş' },
 ]
 
 /** Artış hesabının ufku (gün); parametre tanımsız ya da bozuksa null (sekme yalnızca bilgi metnini genelleştirir). */
@@ -56,6 +58,7 @@ export default async function SozlesmeSayfasi({ params, searchParams }: { params
         {sekme === 'malikler' ? <MaliklerSekmesi s={s} kisiler={(await sihirbazSecenekleri()).kisiler} /> : null}
         {sekme === 'donemler' ? <DonemlerSekmesi s={s} ufukGun={await artisUfukGunu()} /> : null}
         {sekme === 'taksitler' ? <TaksitlerSekmesi s={s} /> : null}
+        {sekme === 'damga' ? <DamgaSekmesi sozlesmeId={s.id} taslak={s.durum === 'TASLAK'} /> : null}
         {sekme === 'belgeler' ? <BelgelerSekmesi s={s} /> : null}
         {sekme === 'hatirlatmalar' ? <HatirlatmalarSekmesi sozlesmeId={s.id} /> : null}
         {sekme === 'gecmis' ? <GecmisSekmesi s={s} /> : null}

@@ -10,6 +10,7 @@ const TON: Record<PanoSatiri['oncelik'], RozetTonu> = { KRITIK: 'kirmizi', YUKSE
 /** Kuralın bağlandığı sözleşme sekmesi. Tabloda olmayan (motor dışı ya da gelecekteki) kurallar sözleşmenin ilk sekmesine gider. */
 const KURAL_SEKMESI: ReadonlyMap<string, string> = new Map([
   ['H1', 'taksitler'], ['H2', 'taksitler'], ['H5_FAZLA_ODEME', 'taksitler'], ['H5', 'donemler'], ['ARTIS_HESAP_HATA', 'donemler'],
+  ['DAMGA_HATA', 'damga'],
 ])
 
 function hedefAdresi(h: Pick<PanoSatiri, 'sozlesmeId' | 'kural' | 'iliskiliTur'>): string | null {
