@@ -719,6 +719,41 @@ describe('kira bedeli değişikliği: doğrulamalar', () => {
     expect((await prisma.sozlesme.findUniqueOrThrow({ where: { id } })).version).toBe(s.version)
   })
 
+  it('I4: hiç hesaplanmamış bir artış tarihini atlayan değişiklik engellenir; hiçbir şey yazılmaz', async () => {
+    const id = await sozlesme()
+    const s = await prisma.sozlesme.findUniqueOrThrow({ where: { id } })
+    // 2026-11-01 artışı hiç hesaplanmadı (satır yok); değişiklik 60 gün sonrasından başlıyor.
+    await expect(kiraBedeliDegistir(id, s.version, { baslangic: t('2026-12-31'), bedel: para('12000'), kaynak: 'ANLASMA', aciklama: 'Ek protokol' }, TEST_BAGLAMI, BUGUN))
+      .rejects.toMatchObject({ name: 'IsKuraliHatasi', kod: 'ACIK_ARTIS', alan: 'baslangic', message: expect.stringContaining('01.11.2026') })
+    expect(await prisma.kiraDonemi.count({ where: { sozlesmeId: id } })).toBe(1)
+    expect((await prisma.sozlesme.findUniqueOrThrow({ where: { id } })).version).toBe(s.version)
+    // Artış kuralı YOK olan sözleşmede beklenen artış yoktur.
+    const artissiz = await sozlesme({ artisKurali: 'YOK' })
+    const v = (await prisma.sozlesme.findUniqueOrThrow({ where: { id: artissiz } })).version
+    await kiraBedeliDegistir(artissiz, v, { baslangic: t('2026-12-31'), bedel: para('12000'), kaynak: 'ANLASMA', aciklama: 'Ek protokol' }, TEST_BAGLAMI, BUGUN)
+    expect(await prisma.kiraDonemi.count({ where: { sozlesmeId: artissiz } })).toBe(2)
+  })
+
+  it('I4: son dönem onaylı artışla açılmışsa sıradaki hesaplanmamış artışa kadar değişiklik yapılır, sonrasına yapılamaz; yenilemenin bekleyen ILK dönem artışı da atlanamaz', async () => {
+    const id = await sozlesme({ baslangic: '2024-11-01', bitis: '2027-10-31' }, t('2024-11-01'))
+    await prisma.$transaction((tx) => artislariHesapla(tx, t('2025-10-20')))
+    const a = await prisma.artisHesabi.findFirstOrThrow({ where: { sozlesmeId: id } })
+    await artisOnayla(a.id, a.version, TEST_BAGLAMI, t('2025-10-20'))
+    const s = await prisma.sozlesme.findUniqueOrThrow({ where: { id } })
+    // Son dönem 2025-11-01 (onaylı artış); 2026-11-01 artışı henüz hesaplanmadı: ondan önceki tarihe değişiklik serbest, sonrasına değil.
+    await expect(kiraBedeliDegistir(id, s.version, { baslangic: t('2026-11-02'), bedel: para('20000'), kaynak: 'ANLASMA', aciklama: 'Ek protokol' }, TEST_BAGLAMI, BUGUN))
+      .rejects.toMatchObject({ kod: 'ACIK_ARTIS', message: expect.stringContaining('01.11.2026') })
+    await kiraBedeliDegistir(id, s.version, { baslangic: t('2026-10-01'), bedel: para('20000'), kaynak: 'ANLASMA', aciklama: 'Ek protokol' }, TEST_BAGLAMI, BUGUN)
+    expect(await prisma.kiraDonemi.count({ where: { sozlesmeId: id } })).toBe(3)
+
+    const eski = await sozlesme({ baslangic: '2025-11-01', bitis: '2026-10-31' })
+    const yeni = await sozlesmeYenile(eski, TEST_BAGLAMI)
+    await sozlesmeAktiflestir(yeni, 0, TEST_BAGLAMI, BUGUN)
+    const y = await prisma.sozlesme.findUniqueOrThrow({ where: { id: yeni } })
+    await expect(kiraBedeliDegistir(yeni, y.version, { baslangic: t('2027-01-01'), bedel: para('20000'), kaynak: 'ANLASMA', aciklama: 'Ek protokol' }, TEST_BAGLAMI, BUGUN))
+      .rejects.toMatchObject({ kod: 'ACIK_ARTIS', message: expect.stringContaining('01.11.2026') })
+  })
+
   it('değişiklik tam artış tarihinden başlarsa o artışın yerine geçer ve iptal edilen artış kimliği denetime yazılır', async () => {
     const id = await sozlesme()
     await hesapla()

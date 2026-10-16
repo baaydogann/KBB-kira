@@ -436,6 +436,25 @@ export async function artisElleOranGir(id: number, version: number, g: { oran: P
   }, ISLEM)
 }
 
+/**
+ * Son kira döneminin başlangıcından sonra (yenilemenin ayarlanmamış ILK döneminde: başlangıcından itibaren), `sinir`dan önce başlayan ve
+ * ONAYLANDI artış hesabı olmayan ilk artış tarihi; yoksa undefined.
+ */
+async function onaylanmamisArtisTarihi(
+  tx: Tx, s: { id: number; ilkKiraBaslangici: Date; artisPeriyoduAy: number; oncekiSozlesmeId: number | null; baslangic: Date },
+  sonDonem: { kaynak: string; baslangic: Date; artisHesabiId: number | null }, sinir: Tarih,
+): Promise<Tarih | undefined> {
+  const alt = tarihDb(sonDonem.baslangic)
+  const ilkDonemArtisi = ilkDonemArtisBekliyorMu(s, sonDonem)
+  const beklenen = artisTarihleri({ ilkKiraBaslangici: tarihDb(s.ilkKiraBaslangici), periyotAy: s.artisPeriyoduAy, sonTarih: gunEkle(sinir, -1) })
+    .filter((x) => karsilastir(x, alt) > (ilkDonemArtisi ? -1 : 0))
+  if (beklenen.length === 0) return undefined
+  const onayli = new Set((await tx.artisHesabi.findMany({
+    where: { sozlesmeId: s.id, durum: 'ONAYLANDI', donemBaslangic: { in: beklenen.map(dbTarih) } }, select: { donemBaslangic: true },
+  })).map((a) => tarihDb(a.donemBaslangic)))
+  return beklenen.find((x) => !onayli.has(x))
+}
+
 export async function kiraBedeliDegistir(
   sozlesmeId: number, version: number, g: { baslangic: Tarih; bedel: Para; kaynak: 'TESPIT' | 'ANLASMA' | 'ELLE'; aciklama: string },
   baglam: IslemBaglami, bugun: Tarih = bugunIstanbul(),
@@ -450,6 +469,9 @@ export async function kiraBedeliDegistir(
     const s = await tx.sozlesme.findUnique({ where: { id: sozlesmeId } })
     if (!s) throw new BulunamadiHatasi('Sözleşme bulunamadı.')
     if (!yururlukteMi(s.durum)) throw new IsKuraliHatasi('DURUM', 'Yalnızca yürürlükteki sözleşmenin bedeli değiştirilir.')
+    // Tarih aralığı, artış sırası denetimlerinden önce: bitişten sonraki tarih atlanan artış olarak değil, aralık dışı olarak bildirilir.
+    const bitis = tarihDbOpt(s.bitis)
+    if (bitis !== null && karsilastir(g.baslangic, bitis) > 0) throw new IsKuraliHatasi('BASLANGIC', 'Başlangıç tarihi sözleşme bitişinden sonra olamaz.', 'baslangic')
     const r = await tx.sozlesme.updateMany({ where: { id: sozlesmeId, version }, data: { version: { increment: 1 } } })
     if (r.count === 0) throw new CakismaHatasi()
     // Son kira döneminden sonra, değişiklik tarihinden önce onay bekleyen bir artış varsa yeni dönem onu onaylanamaz bırakırdı (sıra kuralı):
@@ -468,6 +490,16 @@ export async function kiraBedeliDegistir(
       throw new IsKuraliHatasi(
         'ACIK_ARTIS',
         `${formatTarih(tarihDb(acikArtis.donemBaslangic))} tarihli artış onay bekliyor. Önce onu onaylayın ya da değişikliği o artışın başlangıç tarihinden başlatın.`,
+        'baslangic',
+      )
+    }
+    // I4: hiç hesaplanmamış (satırı olmayan) artış da sessizce yutulmasın: son kira döneminden sonra, değişiklik tarihinden önce başlayan
+    // her artış tarihi onaylanmış olmalıdır. Yenilemenin ayarlanmamış ILK dönemi kendi başlangıcındaki artışı bekler (o tarih de sayılır).
+    const atlanan = sonDonem === null || s.artisKurali === 'YOK' ? undefined : await onaylanmamisArtisTarihi(tx, s, sonDonem, g.baslangic)
+    if (atlanan !== undefined) {
+      throw new IsKuraliHatasi(
+        'ACIK_ARTIS',
+        `${formatTarih(atlanan)} tarihli artış henüz hesaplanıp onaylanmadı. Önce artışı hesaplatıp onaylayın ya da değişikliği o artışın başlangıç tarihinden başlatın.`,
         'baslangic',
       )
     }
