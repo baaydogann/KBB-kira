@@ -15,6 +15,9 @@ export default async function kurulum(): Promise<void> {
   await prisma.kullanici.create({ data: { kullaniciAdi: E2E_KULLANICI.kullaniciAdi, adSoyad: 'E2E Kullanıcı', sifreHash: await sifreHashle(E2E_KULLANICI.sifre), sifreDegismeli: false } })
   const birim = await prisma.birim.create({ data: { ad: 'Emlak ve İstimlak Dairesi', kurumsalKod: '46.01.33.01', fonksiyonelKod: '01.3.9.00' } })
   await prisma.tasinmaz.create({ data: { tur: 'ISYERI', kisaAd: 'Meram hizmet binası', adres: 'Meram', ilce: 'Meram', kullanimAmaci: 'HIZMET_BINASI', kullananBirimId: birim.id } })
+  // F2 ödeme paketi testi: ayrı birim ve taşınmaz; paket yalnızca bu birimin (o testin) sözleşmesini içerir.
+  const odemeBirimi = await prisma.birim.create({ data: { ad: 'E2E Ödeme Birimi', kurumsalKod: '46.01.33.02', fonksiyonelKod: '01.3.9.00' } })
+  await prisma.tasinmaz.create({ data: { tur: 'ISYERI', kisaAd: 'Selçuklu ek bina', adres: 'Selçuklu', ilce: 'Selçuklu', kullanimAmaci: 'HIZMET_BINASI', kullananBirimId: odemeBirimi.id } })
   const kisi = await prisma.kisi.create({ data: { tip: 'GERCEK', tckn: '10000000146', ad: 'Deneme', soyad: 'Malik', vergiStatusu: 'GMSI_GERCEK' } })
   await prisma.iban.create({ data: { kisiId: kisi.id, iban: 'TR330006100519786457841326', bankaAdi: 'Deneme Bankası' } })
   await prisma.$disconnect()

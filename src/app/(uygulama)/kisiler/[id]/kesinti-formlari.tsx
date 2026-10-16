@@ -31,8 +31,9 @@ export function BorcSorguFormu({ kisiId }: { kisiId: number }) {
       <Alan etiket="Borç tutarı" ad="borcTutari" hata={durum.alanHatalari.borcTutari} ipucu="Yalnız borç varsa">
         <Girdi name="borcTutari" defaultValue={durum.degerler?.borcTutari} inputMode="decimal" autoComplete="off" disabled={!borcVar} />
       </Alan>
-      <Alan etiket="Vergi dairesi" ad="vergiDairesi" hata={durum.alanHatalari.vergiDairesi}>
-        <Girdi name="vergiDairesi" defaultValue={durum.degerler?.vergiDairesi} autoComplete="off" />
+      {/* Kişi sayfasındaki kişi formu da vergiDairesi kimliğini taşır; etiket doğru girdiye bağlansın diye benzersiz kimlik. */}
+      <Alan etiket="Vergi dairesi" ad="sorgu-vergiDairesi" hata={durum.alanHatalari.vergiDairesi}>
+        <Girdi id="sorgu-vergiDairesi" name="vergiDairesi" defaultValue={durum.degerler?.vergiDairesi} autoComplete="off" />
       </Alan>
       <Alan etiket="Belge no" ad="belgeNo" hata={durum.alanHatalari.belgeNo}>
         <Girdi name="belgeNo" defaultValue={durum.degerler?.belgeNo} autoComplete="off" />

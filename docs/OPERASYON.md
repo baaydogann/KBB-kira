@@ -91,13 +91,43 @@ Geri alma (registry): `:latest` etiketi her yayında yer değiştirir, ona dön�
 Dönüş tamamlanınca `.env`'i yeniden `:latest`'e almak yerine bir sonraki düzeltme yayınlanana kadar SHA'da bırakın. Migrasyonlar geri alınmaz: şema değişikliği içeren bir sürümden dönülüyorsa veritabanı yeni şemada kalır; gerekirse son yedeği geri yükleyin (aşağıdaki geri yükleme adımları).
 
 ## Ödeme kaydı (F1) ve vadesi geçmiş taksitler
-F1 ödeme kaydetmez; ödeme paketi (PAKETTE → ODEME_EMRINDE → ODENDI) F2 ile gelir. O zamana kadar bir taksitin ödendiğini gösteren tek işaret, kullanıcının o taksitin H1 hatırlatmasını tamamlamasıdır.
+F1 ödeme kaydetmez; ödeme paketi (PAKETTE → ODEME_EMRINDE → ODENDI) F2 ile gelir (bkz. "F2 — Ödeme paketleri"). F2 öncesi ödemeler "Sistem dışında ödendi" ile işaretlenir.
 
 Vadesi geçmiş planlı taksit sistem dışında ödenmiş olabilir; bu yüzden sessizce değiştirilmez. Artış onayı, tespit/anlaşma, fesih, yenileme kesimi gibi değişiklikler vadesi geçmiş taksitin tutarını, türünü (normal/kıst) ya da durumunu (iptal) değiştirmez:
 - yeni tutar daha yüksekse fark ayrı bir FARK taksiti olarak açılır (vade: işlem günü + `FARK_VADE_GUN`);
 - daha düşükse ya da taksit artık sözleşme süresinde değilse KRITIK "fazla ödeme" hatırlatması açılır (`H5_FAZLA_ODEME`): ödenmişse mahsup veya iade takibi yapın, ödenmemişse hatırlatmayı notla tamamlayın.
 
 Vadesi gelmemiş planlı taksitler eskisi gibi yeni değerlerle yeniden hesaplanır ya da iptal edilir.
+
+## F2 — Ödeme paketleri
+
+F2 ile ödeme sistemde kaydedilir: paket (TASLAK → HESAPLANDI → KESINLESTI → ODEME_EMRINDE → ODENDI). Ödeme sürecindeki (PAKETTE, ODEME_EMRINDE, ODENDI) taksitler ve tahakkuk etmiş FARK'ı olan taksitler yeniden planlamada dondurulur; tutar değişirse FARK taksiti ya da fazla ödeme hatırlatması açılır.
+
+### Kurulum
+- F2 migrasyonu ve yeni tohum parametreleri (`MUHASEBE_FIS_HESAPLARI`, `HATIRLATMA_22A_ONCE_GUN`, `HATIRLATMA_MUHTASAR_GORUNUR_GUN`, `MUHTASAR_SON_GUN`, `DAMGA_MALIK_BEYAN_GUN`, `IDARE_ADI`, `IDARE_VKN`) güncellemede `migrate` servisiyle kendiliğinden gelir (`docker compose up -d`). Migrasyon ya da tohum çalışmadan uygulama başlatılırsa paket PDF'i ve hatırlatma işi "parametre yok" hatasıyla durur.
+- `IDARE_VKN` girilmeli (Yönetim → Parametreler). Girilmezse föyde VKN "GİRİLMEDİ" yazar ve paket ön kontrolü uyarı verir.
+- `MUHASEBE_FIS_HESAPLARI` (fiş önerisinin hesap kodları) muhasebe müdürlüğüyle teyit edilmeli; değişiklik yeni yürürlük kaydıyla yapılır, değer JSON şemasına uymazsa reddedilir.
+- Her yıl Aralık sonunda bir sonraki yılın `DAMGA_AZAMI` değeri girilmeli. Girilmezse yeni yıl tarihli sözleşmenin aktifleştirilmesinde ILK damga kaydı oluşmaz ve `DAMGA_HATA` hatırlatması açılır.
+
+### Aylık akış
+1. Ödeme paketleri → yeni paket (birim, vade aralığı) → **Hesapla** (tutarları görün) → 22/A borç sorgularını (kişi sayfası) ve KDV'li alıcıların faturalarını girin → **yeniden hesaplayın** → **Kesinleştir** (hesapla ile aynı gün). Taksit ekleme/çıkarma, bölme ya da fatura değişikliği paketi taslağa döndürür; kesinleştirmeden önce son hesap gerekir. Hesaptan sonra oran, malik, haciz, damga ya da sorgu değiştiyse kesinleştirme "yeniden hesaplayın" der.
+2. Çıktılar kartından **Paket belgeleri (PDF)** (föy, ek listesi, pusulalar, fiş önerisi, artış tabloları) ve **Banka aktarım dosyası (Excel)** alınır → muhasebe ödeme emri no ve tarihi girilir (22/A belgesi o tarihte geçerli olmalı; süresi dolduysa kişi sayfasından yeni sorgu girin) → ödeme yapılınca **Ödendi**.
+3. Ayın 20'sinde H9 hatırlatmasıyla Raporlar ekranından önceki ayın muhtasar ve damga listelerini (ödeme tarihine göre) alın; 22/A listesi vergi dairesi özetiyle gelir.
+- Kesinleşmiş ama ödenmemiş paket iptal edilebilir (taksitler ve kesinti kalanları geri gelir). Ödenmiş paket iptal edilmez; yanlış "ödendi" ya da bankadan dönen ödeme için **Ödemeyi geri al** kullanılır, tutar hatası kira dönemi bedeliyle düzeltilir.
+
+### Geçiş
+- F2'den önce sistem dışında ödenmiş taksitler sözleşmenin Taksitler sekmesinde **Sistem dışında ödendi** ile kapatılır (ödeme tarihi ve not); yanlışsa aynı yerden geri alınır.
+- F2 öncesi aktifleştirilmiş sözleşmelerin ILK damga kaydı yoktur; gerekiyorsa Damga sekmesinden elle eklenir.
+
+### Müşavir teyit listesine eklenecekler
+- haciz ve 22/A kesintilerinin 333 hesabına kaydı;
+- 22/A ve haciz toplamasının hak sahibi bazında yapılması;
+- artış onayı beklerken ödemenin engellenmesi (spec gereği engel);
+- vakıf/dernek muhtasar kodu (listede "—" ve uyarı);
+- 22/A eşiğinin damga ve haciz düşüldükten sonraki tutara uygulanması;
+- muhtasar listesinin tahakkuk yerine ödeme tarihine göre alınması (stopaj "hesaben ödemede" de doğar; GVK 94);
+- tek borç sorgusunda birden çok vergi dairesine borç (şimdilik tek daire);
+- ILK damga taahhüt notunun KDV'li sözleşmede KDV'yi içermesi.
 
 ## Tatil takvimi
 İş günü hesapları resmi tatil tablosunu kullanır: H2 ödeme emri hazırlığı tarihi, H4 endeks yayın günü ve H6 fesih bildirimi son günü. Eksik bir tatil bu tarihleri bir gün yanlış verir.
