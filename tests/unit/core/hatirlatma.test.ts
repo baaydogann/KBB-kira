@@ -281,6 +281,19 @@ describe('H7 / H8', () => {
     expect(bul(veri({ sozlesmeler: [s] }), 'H8')).toHaveLength(0)
     expect(bul(veri({ sozlesmeler: [s], bugun: t('2026-11-01') }), 'H8')[0]!.hedefTarih).toBe('2026-11-28')
   })
+  it('I5: uzama sayacı sıfır olsa da ilk kira başlangıcından 10 yıl (120 ay) geçmişse H8 üretilir (göç edilmiş sözleşme)', () => {
+    const gocmus = (ilk: string) => sozlesme({ uzamaSayisi: 0, ilkKiraBaslangici: t(ilk), baslangic: t('2026-03-01'), bitis: t('2027-02-28') })
+    expect(bul(veri({ sozlesmeler: [gocmus('2014-03-01')], bugun: t('2026-11-01') }), 'H8').map((x) => [x.anahtar, x.hedefTarih]))
+      .toEqual([['H8:sozlesme:1:2027-02-28', '2026-11-28']])
+    // 3 yıllık sözleşme: yok. Sınır: tam 120 ay dahil, 119 ay hariç.
+    expect(bul(veri({ sozlesmeler: [gocmus('2023-03-01')], bugun: t('2026-11-01') }), 'H8')).toHaveLength(0)
+    expect(bul(veri({ sozlesmeler: [gocmus('2016-11-01')], bugun: t('2026-11-01') }), 'H8')).toHaveLength(1)
+    expect(bul(veri({ sozlesmeler: [gocmus('2016-11-02')], bugun: t('2026-11-01') }), 'H8')).toHaveLength(0)
+    // Arsa (TBK 347 dışı) ve belirsiz süreli sözleşmede yine yok; hedef geçince yok.
+    expect(bul(veri({ sozlesmeler: [{ ...gocmus('2014-03-01'), tasinmazTuru: 'ARSA' }], bugun: t('2026-11-01') }), 'H8')).toHaveLength(0)
+    expect(bul(veri({ sozlesmeler: [{ ...gocmus('2014-03-01'), bitis: null }], bugun: t('2026-11-01') }), 'H8')).toHaveLength(0)
+    expect(bul(veri({ sozlesmeler: [gocmus('2014-03-01')], bugun: t('2026-11-29') }), 'H8')).toHaveLength(0)
+  })
   it('H8 bildirim son tarihi (hedef) geçince üretilmez', () => {
     const s = sozlesme({ uzamaSayisi: 10, bitis: t('2027-02-28') })
     expect(bul(veri({ sozlesmeler: [s], bugun: t('2026-11-28') }), 'H8')).toHaveLength(1)

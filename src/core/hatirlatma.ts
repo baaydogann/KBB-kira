@@ -1,7 +1,7 @@
 import { formatTL, para } from './para'
 import { artisTarihleri, tespitTarihleri } from './takvim'
 import {
-  ayAdi, ayAnahtari, ayEkle, ayKaydir, birlestir, enKucukTarih, formatTarih, gunEkle, gunFarki,
+  ayAdi, ayAnahtari, ayEkle, ayFarki, ayKaydir, birlestir, enKucukTarih, formatTarih, gunEkle, gunFarki,
   isGunuEkle, isGunuMu, karsilastir, parcala, sonrakiIsGunu, tarihinAyi, type Ay, type Tarih,
 } from './tarih'
 import { tbk347KapsamindaMi, type ArtisKurali, type TasinmazTuru } from './tipler'
@@ -268,7 +268,8 @@ function bitisVeUzamaKurallari(v: HatirlatmaVerisi, s: SozlesmeOzeti, ekle: Ekle
         hedefTarih: d, gorunurTarih: ayEkle(d, -a.tespitOnceAy), oncelik: 'NORMAL', kararGerekli: false,
       })
     }
-    if (s.uzamaSayisi >= 10 && s.bitis !== null) {
+    // 10 uzama yılı: uzama sayacı ya da (göç edilmiş sözleşmede sayaç sıfırdan başladığı için) ilk kira başlangıcından geçen 120 ay.
+    if ((s.uzamaSayisi >= 10 || ayFarki(s.ilkKiraBaslangici, v.bugun) >= 120) && s.bitis !== null) {
       const hedef = ayEkle(s.bitis, -a.uzama10OnceAy)
       if (karsilastir(v.bugun, hedef) <= 0) {
         ekle({
