@@ -162,6 +162,21 @@ describe('.ics takvim', () => {
     expect(ics.match(/BEGIN:VEVENT/g)).toHaveLength(1)
   })
 
+  it('KRITIK açık ya da ertelenmiş kayıt 7 günlük pencereden bağımsız akışta kalır (gecikmiş kritik iş takvimden düşmez); kapanmış KRITIK kayıt girmez', async () => {
+    const kid = await yeniKullanici('kritik')
+    const token = await icsTokenUret(kid, TEST_BAGLAMI)
+    await hatirlatmaEkle({ baslik: 'ESKI-KRITIK-ACIK', oncelik: 'KRITIK', hedefTarih: dbTarih(t('2026-08-01')) })
+    await hatirlatmaEkle({ baslik: 'ESKI-KRITIK-ERTELENDI', oncelik: 'KRITIK', durum: 'ERTELENDI', hedefTarih: dbTarih(t('2026-09-01')), ertelenenTarih: dbTarih(t('2026-09-20')) })
+    await hatirlatmaEkle({ baslik: 'ESKI-KRITIK-TAMAM', oncelik: 'KRITIK', durum: 'TAMAMLANDI', hedefTarih: dbTarih(t('2026-08-01')) })
+    await hatirlatmaEkle({ baslik: 'ESKI-KRITIK-KAPANDI', oncelik: 'KRITIK', durum: 'OTOMATIK_KAPANDI', hedefTarih: dbTarih(t('2026-08-01')) })
+    await hatirlatmaEkle({ baslik: 'ESKI-YUKSEK', oncelik: 'YUKSEK', hedefTarih: dbTarih(t('2026-10-07')) })
+    const ics = (await takvimIcerigi(token, BUGUN))!
+    expect(etkinlik(ics, 'ESKI-KRITIK-ACIK')).toContain('DTSTART;VALUE=DATE:20260801\r\n')
+    expect(etkinlik(ics, 'ESKI-KRITIK-ERTELENDI')).toContain('DTSTART;VALUE=DATE:20260901\r\n')
+    for (const yok of ['ESKI-KRITIK-TAMAM', 'ESKI-KRITIK-KAPANDI', 'ESKI-YUKSEK']) expect(duzles(ics)).not.toContain(yok)
+    expect(ics.match(/BEGIN:VEVENT/g)).toHaveLength(2)
+  })
+
   it('sınır etkinlik tarihine göre uygulanır: 2000 kayıttan fazlasında ertelenmiş kayıt yeni tarihinin sırasına girer, hedef sırasına göre kesilmez', async () => {
     const kid = await yeniKullanici('sinir')
     const token = await icsTokenUret(kid, TEST_BAGLAMI)

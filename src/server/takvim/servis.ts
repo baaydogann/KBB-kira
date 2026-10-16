@@ -60,6 +60,8 @@ export function takvimUrl(token: string): string {
  * - ACIK kayıt `hedefTarih >= eşik` ise girer ve hedef tarihinde görünür.
  * - ERTELENDI kayıt `ertelenenTarih >= eşik` YA DA `hedefTarih >= eşik` ise girer. Etkinlik tarihi `ertelenenTarih >= eşik` ise ertelenen
  *   tarih, değilse (erteleme eşikten eski ya da yok) hedef tarihidir: erteleme günü geçse de hedefi yaklaşan açık kayıt takvimden düşmez.
+ * - KRITIK önceliğindeki ACIK ya da ERTELENDI kayıt pencereden bağımsız girer (aynı etkinlik tarihi kuralıyla): gecikmiş kritik iş
+ *   (ör. ödenmemiş taksit, fazla ödeme) tamamlanana kadar takvimden düşmez.
  * Etkinlikler bu etkinlik tarihine, eşitlikte kimliğe göre sıralanır ve `AZAMI_ETKINLIK` sınırı sıralamadan SONRA (SQL'de) uygulanır.
  *
  * KVKK / spec §9: akışta yalnızca sözleşme no, taşınmaz kısa adı ve olay bulunur; tutar, kişi adı, TCKN, IBAN yok (bkz. `MOTOR_KURALLARI`).
@@ -80,6 +82,7 @@ export async function takvimIcerigi(token: string, bugun: Tarih = bugunIstanbul(
           FROM hatirlatma
          WHERE (durum = 'ACIK' AND hedef_tarih >= ${esik}::date)
             OR (durum = 'ERTELENDI' AND (ertelenen_tarih >= ${esik}::date OR hedef_tarih >= ${esik}::date))
+            OR (durum IN ('ACIK', 'ERTELENDI') AND oncelik = 'KRITIK')
       ) AS k
      ORDER BY k.tarih, k.id
      LIMIT ${AZAMI_ETKINLIK}`
