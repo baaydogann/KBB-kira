@@ -44,7 +44,8 @@ export default async function SozlesmeSayfasi({ params, searchParams }: { params
   const s = await sozlesmeDetayi(id).catch((e: unknown) => { if (e instanceof BulunamadiHatasi) notFound(); throw e })
   return (
     <>
-      <SayfaBasligi baslik={`${s.sozlesmeNo} — ${s.tasinmaz.kisaAd}`} aciklama={s.birim.ad} />
+      <SayfaBasligi baslik={`${s.sozlesmeNo} — ${s.tasinmaz.kisaAd}`} aciklama={s.birim.ad}
+        eylemler={s.durum === 'TASLAK' ? null : <a href={`/api/sozlesmeler/${id}/denetim-dosyasi`} className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm text-marka hover:bg-slate-50">Denetim dosyası (PDF)</a>} />
       <div className="mb-4 grid gap-3 rounded-lg border border-slate-200 bg-white p-3 text-sm md:grid-cols-4">
         <div>Durum<br /><Rozet ton={DURUM_TONU[s.durum]}>{DURUM_ETIKETI[s.durum]}</Rozet></div>
         <div>Güncel bedel<br /><strong><ParaMetni deger={s.guncelBedel} /></strong> /{s.bedelTabani === 'AYLIK' ? 'ay' : 'yıl'} ({s.bedelTuru === 'BRUT' ? 'brüt' : 'net'})</div>
