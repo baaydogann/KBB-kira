@@ -257,6 +257,19 @@ describe('I3 + I8: var olan kira döneminin bedeli değişir', () => {
     expect([iso(sonraki.donemBaslangic), sonraki.eskiBedel.toFixed(2)]).toEqual(['2027-11-01', '13120.00'])
   })
 
+  it('I3: önceki bedel, önceki sözleşmenin yenileme başlangıcından önceki gün geçerli bedelidir (o tarihte açtığı dönem artışı ikinci kez uygulatmaz)', async () => {
+    const eski = await sozlesme({ baslangic: '2025-11-01', bitis: '2026-10-31' })
+    const yeni = await sozlesmeYenile(eski, TEST_BAGLAMI)
+    await sozlesmeAktiflestir(yeni, 0, TEST_BAGLAMI, BUGUN)
+    // Önceki sözleşme (geç aktifleştirilen yenilemeden önce kendiliğinden uzayıp) aynı tarihli artışı kendi döneminde uygulamış olsun.
+    await prisma.kiraDonemi.updateMany({ where: { sozlesmeId: eski }, data: { bitis: new Date('2026-10-31') } })
+    await prisma.kiraDonemi.create({ data: { sozlesmeId: eski, baslangic: new Date('2026-11-01'), bitis: null, bedelTutari: '13120.00', bedelTabani: 'AYLIK', kaynak: 'ARTIS' } })
+    await tufe12Gir(10, '31.20')
+    await hesapla()
+    const a = await prisma.artisHesabi.findFirstOrThrow({ where: { sozlesmeId: yeni } })
+    expect([a.eskiBedel.toFixed(2), a.yeniBedel?.toFixed(2)]).toEqual(['10000.00', '13120.00'])
+  })
+
   it('I8: onaylı artışın başlangıcından işleyen tespit o dönemin bedelini değiştirir; tahakkuk etmiş taksitler FARK alır', async () => {
     const id = await sozlesme()
     const kasim = await taksit(id, '2026-11')

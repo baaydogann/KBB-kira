@@ -110,7 +110,7 @@ async function sozlesmeArtisiniHesapla(tx: Tx, sozlesmeId: number, o: HesapOrtam
   izleyici.donem = d
   const mevcut = s.artislar.find((a) => tarihDb(a.donemBaslangic) === d)
   if (mevcut && mevcut.durum !== 'BEKLEMEDE') return null
-  const oncekiBedel = d === sonKd.baslangic ? await oncekiSozlesmeninSonBedeli(tx, s.oncekiSozlesmeId, sonKd.bedel) : oncekiDonemBedeli(kd, d, s.sozlesmeNo)
+  const oncekiBedel = d === sonKd.baslangic ? await oncekiSozlesmeninSonBedeli(tx, s.oncekiSozlesmeId, d, sonKd.bedel) : oncekiDonemBedeli(kd, d, s.sozlesmeNo)
   const konut = await parametreOpsiyonel('TBK344_KONUT_SINIR', d, tx)
   const r = artisHesapla({
     donemBaslangic: d, ilkKiraBaslangici: tarihDb(s.ilkKiraBaslangici), oncekiBedel,
@@ -160,13 +160,17 @@ function oncekiDonemBedeli(kd: readonly KiraDonemiGirdi[], d: Tarih, sozlesmeNo:
 }
 
 /**
- * I3: yenilemenin ilk günündeki artışta önceki bedel, önceki sözleşmenin son kira döneminin bedelidir (taslağın kopyaladığı değer).
- * Önceki sözleşmenin kira dönemi yoksa (yalnızca elle kurulmuş veri) ILK dönemin bedeli kullanılır.
+ * I3: yenilemenin ilk günündeki (`d`) artışta önceki bedel, önceki sözleşmenin son bedelidir: `d`den önceki gün geçerli kira döneminin
+ * bedeli (taslağın kopyaladığı değer). Önceki sözleşme `d`de kendi dönemini açmışsa (yenileme geç aktifleştirilmeden önce kendiliğinden
+ * uzayıp aynı artışı onaylamışsa) o dönem sayılmaz: artış iki kez uygulanmaz. O güne ait dönem yoksa ILK dönemin bedeli kullanılır.
  */
-async function oncekiSozlesmeninSonBedeli(tx: Tx, oncekiSozlesmeId: number | null, ilkBedel: Para): Promise<Para> {
+async function oncekiSozlesmeninSonBedeli(tx: Tx, oncekiSozlesmeId: number | null, d: Tarih, ilkBedel: Para): Promise<Para> {
   if (oncekiSozlesmeId === null) return ilkBedel
-  const son = await tx.kiraDonemi.findFirst({ where: { sozlesmeId: oncekiSozlesmeId }, orderBy: { baslangic: 'desc' }, select: { bedelTutari: true } })
-  return son === null ? ilkBedel : paraDb(son.bedelTutari)
+  const gun = dbTarih(gunEkle(d, -1))
+  const onceki = await tx.kiraDonemi.findFirst({
+    where: { sozlesmeId: oncekiSozlesmeId, baslangic: { lte: gun }, OR: [{ bitis: null }, { bitis: { gte: gun } }] }, select: { bedelTutari: true },
+  })
+  return onceki === null ? ilkBedel : paraDb(onceki.bedelTutari)
 }
 
 /**
