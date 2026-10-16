@@ -12,6 +12,7 @@ import { PAKET_DURUM_ETIKETI, PAKET_DURUM_TONU } from '../durum'
 import { EylemFormu } from '@/components/eylem-formu'
 import { paketHesaplaAction } from '../actions'
 import { DagilimBolumu } from './bolumler/dagilim'
+import { DurumEylemleriBolumu } from './bolumler/durum-eylemleri'
 import { FaturalarBolumu } from './bolumler/faturalar'
 import { OnKontrolBolumu } from './bolumler/on-kontrol'
 import { TaksitlerBolumu } from './bolumler/taksitler'
@@ -43,6 +44,7 @@ export default async function PaketSayfasi({ params }: { params: Promise<{ id: s
             <p className="max-w-xl text-xs text-slate-600">Oranlar bugünün parametrelerinden alınır. 22/A borç sorgularını ve faturaları hesaplamadan önce girin; kesinleştirme hesapla ile aynı gün yapılır.</p>
           </div>
         ) : null}
+        <DurumEylemleriBolumu p={p} bugun={bugun} />
         <OnKontrolBolumu p={p} />
         <TaksitlerBolumu p={p} oneriler={oneriler} duzenlenebilir={duzenlenebilir} />
         <FaturalarBolumu p={p} duzenlenebilir={duzenlenebilir} />
