@@ -136,6 +136,7 @@ Belge volume'unun adı komutta yazılı değildir: `--volumes-from` web konteyne
 - **Parametre yürürlüğü bitti (H13):** Yönetim → Parametreler'den yeni yürürlük kaydı ekleyin. Örnek: 2027 `DAMGA_AZAMI`. Tatil takvimi için bkz. "Tatil takvimi".
 - **Formlar giriş yapıldığı halde "gönderilemedi" diyor / eylemler reddediliyor:** Vekilin özgün `Host` (ya da `X-Forwarded-Host`) başlığını ilettiğini denetleyin (bkz. Ters vekil).
 - **Worker açılışta kapanıyor ("SESSION_SECRET en az 32 karakter olmalı"):** Worker'ın `.env`'de `SESSION_SECRET` aldığından emin olun.
+- **Web ya da worker açılışta kapanıyor ("Üretimde SESSION_SECRET örnek/yer tutucu bir değer olamaz"):** `.env.example`'daki değer ya da "değiştirin/change me/placeholder" içeren bir değer kullanılmış. `openssl rand -base64 48` ile yeni değer üretip `.env`'e yazın (bkz. Gizli anahtar).
 - **Yüklenen belgeler yeniden başlatmada kayboluyor:** `.env` içinde `BELGE_DIZINI` tanımlı olabilir (bkz. İlk kurulum, `.env.example` uyarısı); satırı silip `docker compose up -d` çalıştırın.
 
 ## CI notu (GitLab)
