@@ -6,6 +6,8 @@ import { islemBaglami, kullaniciGerekli } from '@/server/auth/gerekli'
 import type { IslemBaglami } from '@/server/baglam'
 import { IsKuraliHatasi } from '@/server/hata'
 import { eylemSonrasiHatirlatmalariTazele } from '@/server/isler/hatirlatma-uret'
+import { bugunIstanbul } from '@/core/tarih'
+import { paketHesapla } from '@/server/paket/hesapla'
 import { faturaGirdisiSemasi, paketGirdisiSemasi } from '@/server/paket/sema'
 import { paketFaturasiKaydet, paketOlustur, paketTaksitiBol, paketeTaksitEkle, pakettenTaksitCikar } from '@/server/paket/servis'
 import { basariDurumu, formKimligi, formMetni, formSurum, hataDurumu, uyariIle, yolKimligi, type FormDurumu } from '@/app/_lib/form'
@@ -69,6 +71,13 @@ export async function pakettenTaksitCikarAction(_: FormDurumu, f: FormData): Pro
 
 export async function paketTaksitBolAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
   return paketEylemi(f, 'Bölme tercihi kaydedildi.', (id, version, baglam) => paketTaksitiBol(id, version, taksitKimligi(f), f.get('bolunsun') === 'true', baglam))
+}
+
+/** Hesap tarihi bugündür (tahakkuk); kesinleştirme aynı gün yapılmalıdır. */
+export async function paketHesaplaAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
+  return paketEylemi(f, 'Paket hesaplandı.', async (id, version, baglam) => {
+    await paketHesapla(id, version, baglam, bugunIstanbul())
+  })
 }
 
 export async function paketFaturaAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {

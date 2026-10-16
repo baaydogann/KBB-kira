@@ -1,5 +1,8 @@
 import type { PaketDurumu } from '@/generated/prisma'
+import { ibanNormalize, maskele } from '@/core/dogrulama'
+import type { HesapSatiri } from '@/core/hesap/goruntu'
 import { malikParcalari } from '@/core/paket/hesap'
+import type { PaketOnKontrolKaydi } from './hesapla'
 import { bugunIstanbul, karsilastir, type Tarih } from '@/core/tarih'
 import { prisma } from '../db'
 import { paraDb, paraYaz, tarihDb, tarihDbOpt } from '../donustur'
@@ -42,6 +45,12 @@ async function paketYukle(id: number) {
     include: {
       birim: { select: { id: true, ad: true } },
       faturalar: true,
+      dagilimlar: {
+        orderBy: { sira: 'asc' },
+        include: {
+          kisi: true, odemeKisi: true, iban: { select: { iban: true } }, taksit: { select: { sozlesme: { select: { sozlesmeNo: true } } } },
+        },
+      },
       taksitler: {
         where: { aktif: true },
         include: {
@@ -91,6 +100,17 @@ export async function paketDetayi(id: number, bugun: Tarih = bugunIstanbul()) {
       gecikmis: karsilastir(tarihDb(pt.taksit.vadeTarihi), bugun) < 0,
     })),
     faturaGereken,
+    onKontrol: (p.onKontrol ?? null) as PaketOnKontrolKaydi | null,
+    toplam: ((p.onKontrol ?? null) as PaketOnKontrolKaydi | null)?.toplam ?? null,
+    // Dağılım tablosunda IBAN maskelidir (spec §16: listelerde maskeli); tam IBAN yalnızca çıktılarda.
+    dagilim: p.dagilimlar.map((d) => ({
+      id: d.id, taksitId: d.taksitId, sozlesmeNo: d.taksit.sozlesme.sozlesmeNo, kisiId: d.kisiId, kisiAdi: kisiGorunenAd(d.kisi),
+      odemeKisiAdi: kisiGorunenAd(d.odemeKisi), ibanMaskeli: d.iban ? maskele(ibanNormalize(d.iban.iban)) : null,
+      parca: d.parca, parcaBaslangic: tarihDb(d.parcaBaslangic), parcaBitis: tarihDb(d.parcaBitis), pay: d.pay, payda: d.payda,
+      brut: paraYaz(paraDb(d.brut)), kdv: paraYaz(paraDb(d.kdv)), stopaj: paraYaz(paraDb(d.stopaj)), damga: paraYaz(paraDb(d.damgaKesintisi)),
+      haciz: paraYaz(paraDb(d.hacizKesintisi)), kesinti22a: paraYaz(paraDb(d.kesinti22a)), net: paraYaz(paraDb(d.net)),
+      satirlar: ((d.hesapGoruntusu ?? {}) as { satirlar?: HesapSatiri[] }).satirlar ?? [],
+    })),
   }
 }
 

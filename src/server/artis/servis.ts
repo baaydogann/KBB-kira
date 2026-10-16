@@ -443,7 +443,7 @@ export async function artisElleOranGir(id: number, version: number, g: { oran: P
  * Son kira döneminin başlangıcından sonra (yenilemenin ayarlanmamış ILK döneminde: başlangıcından itibaren), `sinir`dan önce başlayan ve
  * ONAYLANDI artış hesabı olmayan ilk artış tarihi; yoksa undefined.
  */
-async function onaylanmamisArtisTarihi(
+export async function onaylanmamisArtisTarihi(
   tx: Tx, s: { id: number; ilkKiraBaslangici: Date; artisPeriyoduAy: number; oncekiSozlesmeId: number | null; baslangic: Date },
   sonDonem: NonNullable<Parameters<typeof ilkDonemArtisBekliyorMu>[2]>, sinir: Tarih,
 ): Promise<Tarih | undefined> {

@@ -9,7 +9,11 @@ import { ParaMetni } from '@/components/para'
 import { TarihMetni } from '@/components/tarih'
 import { Rozet } from '@/components/ui/rozet'
 import { PAKET_DURUM_ETIKETI, PAKET_DURUM_TONU } from '../durum'
+import { EylemFormu } from '@/components/eylem-formu'
+import { paketHesaplaAction } from '../actions'
+import { DagilimBolumu } from './bolumler/dagilim'
 import { FaturalarBolumu } from './bolumler/faturalar'
+import { OnKontrolBolumu } from './bolumler/on-kontrol'
 import { TaksitlerBolumu } from './bolumler/taksitler'
 
 export default async function PaketSayfasi({ params }: { params: Promise<{ id: string }> }) {
@@ -30,8 +34,19 @@ export default async function PaketSayfasi({ params }: { params: Promise<{ id: s
         <div>Kalan ödenek<br />{p.kalanOdenek === null ? '—' : <ParaMetni deger={p.kalanOdenek} />}</div>
       </div>
       <div className="space-y-4">
+        {duzenlenebilir ? (
+          <div className="flex flex-wrap items-start gap-3">
+            <EylemFormu eylem={paketHesaplaAction} dugme={p.durum === 'HESAPLANDI' ? 'Yeniden hesapla' : 'Hesapla'} tur="birincil" kimlikOneki="hesapla-">
+              <input type="hidden" name="paketId" value={p.id} />
+              <input type="hidden" name="version" value={p.version} />
+            </EylemFormu>
+            <p className="max-w-xl text-xs text-slate-600">Oranlar bugünün parametrelerinden alınır. 22/A borç sorgularını ve faturaları hesaplamadan önce girin; kesinleştirme hesapla ile aynı gün yapılır.</p>
+          </div>
+        ) : null}
+        <OnKontrolBolumu p={p} />
         <TaksitlerBolumu p={p} oneriler={oneriler} duzenlenebilir={duzenlenebilir} />
         <FaturalarBolumu p={p} duzenlenebilir={duzenlenebilir} />
+        <DagilimBolumu p={p} />
       </div>
     </>
   )

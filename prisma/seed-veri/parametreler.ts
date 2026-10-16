@@ -57,6 +57,8 @@ export const PARAMETRELER: ParametreTohumu[] = [
   { anahtar: 'HATIRLATMA_TESPIT_ONCE_AY', deger: '6', yururlukBaslangic: H, mevzuatDayanagi: 'TBK 344/3' },
   { anahtar: 'HATIRLATMA_UZAMA10_ONCE_AY', deger: '3', yururlukBaslangic: H, mevzuatDayanagi: 'TBK 347/1' },
   { anahtar: 'HATIRLATMA_MEVZUAT_ONCE_GUN', deger: '30', yururlukBaslangic: H },
+  { anahtar: 'IDARE_ADI', deger: 'Konya Büyükşehir Belediyesi', yururlukBaslangic: H, aciklama: 'Ödeme emri hazırlık föyü başlığı' },
+  { anahtar: 'IDARE_VKN', deger: 'GIRILMEDI', yururlukBaslangic: H, aciklama: 'Kurumun vergi kimlik numarası; kurulumda girilir (föy başlığı)' },
   { anahtar: 'EKONOMIK_KOD_HIZMET_BINASI', deger: '03.5.5.05', yururlukBaslangic: '2021-01-01', mevzuatDayanagi: 'Analitik Bütçe Sınıflandırma Rehberi' },
   { anahtar: 'EKONOMIK_KOD_LOJMAN', deger: '03.5.5.06', yururlukBaslangic: '2021-01-01' },
   { anahtar: 'EKONOMIK_KOD_ARSA', deger: '03.5.5.07', yururlukBaslangic: '2021-01-01' },

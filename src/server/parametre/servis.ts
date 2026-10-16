@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { vknGecerliMi } from '@/core/dogrulama'
 import { VARSAYILAN_STATU_KURALLARI, type StatuKurali } from '@/core/hesap/vergi'
 import type { HatirlatmaAyarlari, ParametreBitisi } from '@/core/hatirlatma'
 import { SIFIR, para, type Para } from '@/core/para'
@@ -146,6 +147,12 @@ function degerDogrula(anahtar: string, deger: string, sonKayit: { deger: string 
     }
     if (!statuSemasi.safeParse(ayristirilan).success) {
       throw new IsKuraliHatasi('DEGER', 'Statü kuralı şemaya uymuyor: stopaj, kdvli, teyitGerekli ve muhsgkKodu alanları geçerli olmalıdır.', 'deger')
+    }
+    return
+  }
+  if (anahtar === 'IDARE_VKN') {
+    if (deger !== 'GIRILMEDI' && !vknGecerliMi(deger)) {
+      throw new IsKuraliHatasi('DEGER', 'İdare VKN geçerli bir 10 haneli vergi kimlik numarası olmalı (ya da GIRILMEDI).', 'deger')
     }
     return
   }
