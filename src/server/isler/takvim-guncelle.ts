@@ -5,7 +5,7 @@ import { prisma } from '../db'
 import { dbTarih } from '../donustur'
 import { CakismaHatasi, IsKuraliHatasi } from '../hata'
 import { otomatikUzat } from '../sozlesme/yasam-dongusu'
-import { taksitPlaniniGuncelle, type PlanOzeti } from '../taksit/servis'
+import { BOS_PLAN_OZETI, taksitPlaniniGuncelle, type PlanOzeti } from '../taksit/servis'
 import type { IsSonucu } from './kayit'
 import { BASKA_CALISMA_MESAJI, tekKopya } from './tek-kopya'
 
@@ -36,7 +36,7 @@ const iletiOlustur = (a: Aday, e: unknown): string => {
 async function sozlesmeyiIsle(a: Aday, bugun: Tarih): Promise<SozlesmeSonucu> {
   return prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM sozlesme WHERE id = ${a.id} FOR UPDATE`
-    const s: SozlesmeSonucu = { uzatilan: 0, plan: { eklenen: 0, guncellenen: 0, iptal: 0 }, hesaplanan: 0, bekleyen: 0, hatalar: [] }
+    const s: SozlesmeSonucu = { uzatilan: 0, plan: { ...BOS_PLAN_OZETI }, hesaplanan: 0, bekleyen: 0, hatalar: [] }
     s.uzatilan = await otomatikUzat(tx, bugun, SISTEM_BAGLAMI, a.id)
 
     await tx.$executeRaw`SAVEPOINT takvim_plan`

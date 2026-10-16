@@ -7,6 +7,7 @@ import {
   belirsizSureliyeCevir, malikleriDegistir, otomatikUzat, sozlesmeFeshet, sozlesmeSonlandir, sozlesmeYenile, taslakSil,
 } from '@/server/sozlesme/yasam-dongusu'
 import { BulunamadiHatasi, CakismaHatasi, IsKuraliHatasi } from '@/server/hata'
+import { taksitPlaniniGuncelle } from '@/server/taksit/servis'
 import { TEST_BAGLAMI, temizle } from './yardimci'
 import { girdi, hazirlik, type Hazirlik } from './sozlesme-yardimci'
 
@@ -105,6 +106,34 @@ describe('fesih', () => {
     expect([sonra.fesihSonrasiIslenmisTaksit, sonra.plan.iptal]).toEqual([3, 3])
     const taksitler = await prisma.taksit.findMany({ where: { sozlesmeId: id }, orderBy: { donemBaslangic: 'asc' } })
     expect(taksitler.slice(5).map((x) => x.durum)).toEqual(['ODENDI', 'PAKETTE', 'ODENDI', 'IPTAL', 'ODEME_EMRINDE', 'IPTAL', 'IPTAL'])
+  })
+
+  it('C1: geçmiş tarihli fesih vadesi geçmiş taksiti kıst ya da iptal yapmaz, fazla ödeme hatırlatması açar; vadesi gelmemişler iptal olur', async () => {
+    const id = await aktif()
+    const bugun = t('2026-07-10')
+    await sozlesmeFeshet(id, await surum(id), { tarih: t('2026-06-15'), neden: 'Hizmet binası taşındı' }, TEST_BAGLAMI, bugun)
+    const taksitler = await prisma.taksit.findMany({ where: { sozlesmeId: id }, orderBy: { donemBaslangic: 'asc' } })
+    const ay = (bas: string) => taksitler.find((x) => iso(x.donemBaslangic) === bas)!
+    const [haziran, temmuz] = [ay('2026-06-01'), ay('2026-07-01')]
+    expect([haziran.tur, iso(haziran.donemBitis), haziran.tutar.toFixed(2), haziran.durum, haziran.version]).toEqual(['NORMAL', '2026-06-30', '10000.00', 'PLANLANDI', 0])
+    expect([temmuz.durum, temmuz.version]).toEqual(['PLANLANDI', 0])
+    const iptal = taksitler.filter((x) => x.durum === 'IPTAL').map((x) => iso(x.donemBaslangic)!)
+    expect(iptal.slice(0, 5)).toEqual(['2026-08-01', '2026-09-01', '2026-10-01', '2026-11-01', '2026-12-01'])
+    expect(iptal.every((x) => x >= '2026-08-01')).toBe(true)
+    const hatirlatmalar = () => prisma.hatirlatma.findMany({ where: { kural: 'H5_FAZLA_ODEME', sozlesmeId: id }, orderBy: { iliskiliId: 'asc' } })
+    const h = await hatirlatmalar()
+    expect(h.map((x) => [x.iliskiliTur, x.iliskiliId, x.oncelik, x.kararGerekli, x.durum])).toEqual([
+      ['taksit', String(haziran.id), 'KRITIK', true, 'ACIK'], ['taksit', String(temmuz.id), 'KRITIK', true, 'ACIK'],
+    ])
+    expect(h[0]!.aciklama).toContain('5.000,00')
+    expect(h[1]!.aciklama).toContain('10.000,00')
+    const kayit = await prisma.olayGunlugu.findFirstOrThrow({ where: { eylem: 'FESHET', varlikId: String(id) } })
+    expect((kayit.sonra as { plan: { iptal: number; gecmisDokunulmadi: number } }).plan).toMatchObject({ iptal: iptal.length, gecmisDokunulmadi: 2 })
+    // Plan yeniden çalışınca geçmiş satırlar yine dokunulmaz; hatırlatma çoğalmaz, kullanıcının tamamladığı yeniden açılmaz.
+    await prisma.hatirlatma.update({ where: { id: h[0]!.id }, data: { durum: 'TAMAMLANDI' } })
+    await prisma.$transaction((tx) => taksitPlaniniGuncelle(tx, id, t('2026-07-11')))
+    expect((await hatirlatmalar()).map((x) => [x.id, x.durum, x.hedefTarih.getTime()])).toEqual(h.map((x, i) => [x.id, i === 0 ? 'TAMAMLANDI' : 'ACIK', x.hedefTarih.getTime()]))
+    expect((await prisma.taksit.findUniqueOrThrow({ where: { id: haziran.id } })).version).toBe(0)
   })
 
   it('neden, tarih aralığı ve durum denetlenir', async () => {

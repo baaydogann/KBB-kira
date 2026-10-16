@@ -89,6 +89,15 @@ Geri alma (registry): `:latest` etiketi her yayında yer değiştirir, ona dön�
 
 Dönüş tamamlanınca `.env`'i yeniden `:latest`'e almak yerine bir sonraki düzeltme yayınlanana kadar SHA'da bırakın. Migrasyonlar geri alınmaz: şema değişikliği içeren bir sürümden dönülüyorsa veritabanı yeni şemada kalır; gerekirse son yedeği geri yükleyin (aşağıdaki geri yükleme adımları).
 
+## Ödeme kaydı (F1) ve vadesi geçmiş taksitler
+F1 ödeme kaydetmez; ödeme paketi (PAKETTE → ODEME_EMRINDE → ODENDI) F2 ile gelir. O zamana kadar bir taksitin ödendiğini gösteren tek işaret, kullanıcının o taksitin H1 hatırlatmasını tamamlamasıdır.
+
+Vadesi geçmiş planlı taksit sistem dışında ödenmiş olabilir; bu yüzden sessizce değiştirilmez. Artış onayı, tespit/anlaşma, fesih, yenileme kesimi gibi değişiklikler vadesi geçmiş taksitin tutarını, türünü (normal/kıst) ya da durumunu (iptal) değiştirmez:
+- yeni tutar daha yüksekse fark ayrı bir FARK taksiti olarak açılır (vade: işlem günü + `FARK_VADE_GUN`);
+- daha düşükse ya da taksit artık sözleşme süresinde değilse KRITIK "fazla ödeme" hatırlatması açılır (`H5_FAZLA_ODEME`): ödenmişse mahsup veya iade takibi yapın, ödenmemişse hatırlatmayı notla tamamlayın.
+
+Vadesi gelmemiş planlı taksitler eskisi gibi yeni değerlerle yeniden hesaplanır ya da iptal edilir.
+
 ## Tatil takvimi
 İş günü hesapları resmi tatil tablosunu kullanır: H2 ödeme emri hazırlığı tarihi, H4 endeks yayın günü ve H6 fesih bildirimi son günü. Eksik bir tatil bu tarihleri bir gün yanlış verir.
 

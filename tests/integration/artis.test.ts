@@ -91,6 +91,73 @@ describe('fark taksiti ve fazla ödeme', () => {
   })
 })
 
+describe('C1: vadesi geçmiş PLANLANDI taksit tahakkuk etmiş sayılır', () => {
+  const tespit = (id: number, v: number, baslangic: string, bedel: string) =>
+    kiraBedeliDegistir(id, v, { baslangic: t(baslangic), bedel: para(bedel), kaynak: 'TESPIT', aciklama: 'Karar' }, TEST_BAGLAMI, BUGUN)
+  const surum = async (id: number) => (await prisma.sozlesme.findUniqueOrThrow({ where: { id } })).version
+
+  it('aylık peşin vadeden sonra onaylanan artış: geçmiş Ocak taksiti eski tutarında kalır, fark FARK taksiti olur; gelecek taksit yeniden fiyatlanır', async () => {
+    const id = await sozlesme({ baslangic: '2025-01-01', bitis: '2026-12-31' }, t('2025-01-01'))
+    const bugun = t('2026-01-10')
+    await prisma.$transaction((tx) => artislariHesapla(tx, bugun))
+    const a = await prisma.artisHesabi.findFirstOrThrow({ where: { sozlesmeId: id } })
+    expect([iso(a.donemBaslangic), a.durum, a.yeniBedel?.toFixed(2)]).toEqual(['2026-01-01', 'HESAPLANDI', '13488.00'])
+    const ocakOnce = await taksit(id, '2026-01')
+    await artisOnayla(a.id, a.version, TEST_BAGLAMI, bugun)
+    const ocak = await taksit(id, '2026-01')
+    expect([ocak.durum, ocak.tutar.toFixed(2), ocak.version]).toEqual(['PLANLANDI', '10000.00', ocakOnce.version])
+    const kd = await prisma.kiraDonemi.findFirstOrThrow({ where: { artisHesabiId: a.id } })
+    const farklar = await prisma.taksit.findMany({ where: { sozlesmeId: id, tur: 'FARK' } })
+    expect(farklar.map((f) => [f.anaTaksitId, f.tutar.toFixed(2), iso(f.vadeTarihi), f.kiraDonemiId, f.artisHesabiId, f.durum]))
+      .toEqual([[ocak.id, '3488.00', '2026-01-20', kd.id, a.id, 'PLANLANDI']])
+    expect((await taksit(id, '2026-02')).tutar.toFixed(2)).toBe('13488.00')
+    const kayit = await prisma.olayGunlugu.findFirstOrThrow({ where: { eylem: 'ARTIS_ONAY', varlikId: String(id) } })
+    expect(kayit.sonra).toMatchObject({ plan: { gecmisDokunulmadi: 1 }, farkTaksiti: 1 })
+    // Yeniden çalışan plan geçmiş satıra yine dokunmaz; FARK çoğalmaz.
+    await prisma.$transaction((tx) => taksitPlaniniGuncelle(tx, id, bugun))
+    expect((await taksit(id, '2026-01')).tutar.toFixed(2)).toBe('10000.00')
+    expect(await prisma.taksit.count({ where: { sozlesmeId: id, tur: 'FARK' } })).toBe(1)
+  })
+
+  it('geriye işleyen yüksek tespit: vadesi geçmiş taksitler değişmez, her biri için FARK açılır', async () => {
+    const id = await sozlesme()
+    const [eylul, ekim] = [await taksit(id, '2026-09'), await taksit(id, '2026-10')]
+    await tespit(id, await surum(id), '2026-09-01', '12000')
+    for (const x of [eylul, ekim]) expect((await taksit(id, iso(x.donemBaslangic)!.slice(0, 7))).tutar.toFixed(2)).toBe('10000.00')
+    const farklar = await prisma.taksit.findMany({ where: { sozlesmeId: id, tur: 'FARK' }, orderBy: { anaTaksitId: 'asc' } })
+    expect(farklar.map((f) => [f.anaTaksitId, f.tutar.toFixed(2), f.durum])).toEqual([[eylul.id, '2000.00', 'PLANLANDI'], [ekim.id, '2000.00', 'PLANLANDI']])
+    expect((await taksit(id, '2026-11')).tutar.toFixed(2)).toBe('12000.00')
+  })
+
+  it('geriye işleyen düşük tespit: vadesi geçmiş taksitler değişmez, her biri için tek fazla ödeme hatırlatması açılır (plan yeniden çalışsa da çoğalmaz)', async () => {
+    const id = await sozlesme()
+    const [eylul, ekim] = [await taksit(id, '2026-09'), await taksit(id, '2026-10')]
+    await tespit(id, await surum(id), '2026-09-01', '9000')
+    expect((await taksit(id, '2026-09')).tutar.toFixed(2)).toBe('10000.00')
+    expect((await taksit(id, '2026-10')).tutar.toFixed(2)).toBe('10000.00')
+    expect((await taksit(id, '2026-11')).tutar.toFixed(2)).toBe('9000.00')
+    expect(await prisma.taksit.count({ where: { sozlesmeId: id, tur: 'FARK' } })).toBe(0)
+    await prisma.$transaction((tx) => taksitPlaniniGuncelle(tx, id, BUGUN))
+    const h = await prisma.hatirlatma.findMany({ where: { kural: 'H5_FAZLA_ODEME', sozlesmeId: id }, orderBy: { iliskiliId: 'asc' } })
+    expect(h.map((x) => [x.iliskiliId, x.oncelik, x.kararGerekli])).toEqual([[String(eylul.id), 'KRITIK', true], [String(ekim.id), 'KRITIK', true]])
+    expect(h.every((x) => x.aciklama.includes('1.000,00'))).toBe(true)
+  })
+
+  it('vadesi geçmiş PLANLANDI FARK tahakkuk etmiş sayılır: iptal edilmez, yeni fark yalnızca kalan için açılır', async () => {
+    const id = await sozlesme()
+    const ekim = await taksit(id, '2026-10')
+    // İlk tespit 2026-10-05'te girilir: Eylül ve Ekim vadesi geçmiştir, FARK'ları (vade 2026-10-15) ikinci tespitte de vadesi geçmiş olur.
+    await kiraBedeliDegistir(id, await surum(id), { baslangic: t('2026-09-01'), bedel: para('12000'), kaynak: 'TESPIT', aciklama: 'Karar' }, TEST_BAGLAMI, t('2026-10-05'))
+    const [ilk] = await prisma.taksit.findMany({ where: { sozlesmeId: id, tur: 'FARK', anaTaksitId: ekim.id } })
+    expect([ilk?.tutar.toFixed(2), iso(ilk!.vadeTarihi)]).toEqual(['2000.00', '2026-10-15'])
+    await tespit(id, await surum(id), '2026-10-01', '13000')
+    const ekimFarklari = await prisma.taksit.findMany({ where: { sozlesmeId: id, tur: 'FARK', anaTaksitId: ekim.id }, orderBy: { id: 'asc' } })
+    // Ekim'in ilk FARK'ı (2.000) vadesi geçtiği için tahakkuk etmiş sayılır: iptal edilmez, kalan 1.000 yeni FARK olur (3.000 değil).
+    expect(ekimFarklari.map((f) => [f.id === ilk!.id, f.tutar.toFixed(2), f.durum])).toEqual([[true, '2000.00', 'PLANLANDI'], [false, '1000.00', 'PLANLANDI']])
+    expect((await taksit(id, '2026-10')).tutar.toFixed(2)).toBe('10000.00')
+  })
+})
+
 describe('sıra ve elle oran', () => {
   it('son kira döneminden önceki bir tarihe bedel değişikliği reddedilir', async () => {
     const id = await sozlesme()

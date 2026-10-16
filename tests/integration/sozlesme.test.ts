@@ -124,7 +124,7 @@ describe('aktifleştirme ve taksit planı', () => {
     expect(goruntu.surum).toBe('F1-1')
     expect(goruntu.artisBekleniyor).toBe(false)
     const ikinci = await prisma.$transaction((tx) => taksitPlaniniGuncelle(tx, id, BUGUN))
-    expect(ikinci).toEqual({ eklenen: 0, guncellenen: 0, iptal: 0 })
+    expect(ikinci).toEqual({ eklenen: 0, guncellenen: 0, iptal: 0, gecmisDokunulmadi: 0 })
     expect(await prisma.olayGunlugu.count({ where: { varlik: 'sozlesme', varlikId: String(id), eylem: 'AKTIFLESTIR' } })).toBe(1)
   })
 
@@ -279,7 +279,7 @@ describe('taksit planı (çekirdek değerleriyle)', () => {
     await prisma.kiraDonemi.create({ data: { sozlesmeId: id, baslangic: new Date('2026-07-01'), bitis: null, bedelTutari: '11000.00', bedelTabani: 'AYLIK', kaynak: 'ELLE' } })
     await prisma.taksit.updateMany({ where: { sozlesmeId: id, donemBaslangic: new Date('2026-07-01') }, data: { durum: 'ODENDI' } })
     const ozet = await prisma.$transaction((tx) => taksitPlaniniGuncelle(tx, id, BUGUN))
-    expect(ozet).toEqual({ eklenen: 0, guncellenen: 5, iptal: 0 })
+    expect(ozet).toEqual({ eklenen: 0, guncellenen: 5, iptal: 0, gecmisDokunulmadi: 0 })
     const taksitler = await prisma.taksit.findMany({ where: { sozlesmeId: id }, orderBy: { donemBaslangic: 'asc' } })
     expect(taksitler.map((x) => [x.durum, x.tutar.toFixed(2)])).toEqual([
       ...Array.from({ length: 6 }, () => ['PLANLANDI', '10000.00']),
@@ -389,9 +389,9 @@ describe('denetim özeti ve yenileme zinciri', () => {
     await sozlesmeAktiflestir(yeniId, 0, TEST_BAGLAMI, BUGUN)
     const sonra = async (varlikId: number, eylem: string) =>
       (await prisma.olayGunlugu.findFirstOrThrow({ where: { varlik: 'sozlesme', varlikId: String(varlikId), eylem } })).sonra
-    expect(await sonra(eskiId, 'AKTIFLESTIR')).toEqual({ durum: 'AKTIF', plan: { eklenen: 12, guncellenen: 0, iptal: 0 } })
-    expect(await sonra(yeniId, 'AKTIFLESTIR')).toEqual({ durum: 'AKTIF', plan: { eklenen: 12, guncellenen: 0, iptal: 0 } })
-    expect(await sonra(eskiId, 'YENILEME_ILE_SONA_ERDI')).toEqual({ bitis: '2026-06-30', durum: 'SONA_ERDI', plan: { eklenen: 0, guncellenen: 0, iptal: 6 } })
+    expect(await sonra(eskiId, 'AKTIFLESTIR')).toEqual({ durum: 'AKTIF', plan: { eklenen: 12, guncellenen: 0, iptal: 0, gecmisDokunulmadi: 0 } })
+    expect(await sonra(yeniId, 'AKTIFLESTIR')).toEqual({ durum: 'AKTIF', plan: { eklenen: 12, guncellenen: 0, iptal: 0, gecmisDokunulmadi: 0 } })
+    expect(await sonra(eskiId, 'YENILEME_ILE_SONA_ERDI')).toEqual({ bitis: '2026-06-30', durum: 'SONA_ERDI', plan: { eklenen: 0, guncellenen: 0, iptal: 6, gecmisDokunulmadi: 0 } })
   })
 
   it('yenileme sözleşmesinin ilk kira başlangıcı öncekinden farklıysa aktifleşmez ve tümü geri alınır', async () => {

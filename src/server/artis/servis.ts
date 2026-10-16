@@ -13,7 +13,7 @@ import { onayliOranlariYukle } from '../endeks/oranlar'
 import { BulunamadiHatasi, CakismaHatasi, IsKuraliHatasi } from '../hata'
 import { parametreOpsiyonel, parametreTamsayi } from '../parametre/servis'
 import { kiraDonemiGirdileri } from '../sozlesme/girdi'
-import { taksitPlaniniGuncelle, type PlanOzeti } from '../taksit/servis'
+import { fazlaOdemeHatirlat, taksitPlaniniGuncelle, vadesiGecmisMi, type PlanOzeti } from '../taksit/servis'
 
 /** Kira dönemi + taksit planı yazan işlemler çok satır yazar; Prisma'nın 5 sn'lik varsayılanı yetmez (aktifleştirmedeki gibi). */
 const ISLEM = { timeout: 60_000 }
@@ -199,23 +199,29 @@ export async function artislariHesapla(tx: Tx, bugun: Tarih, sozlesmeId?: number
 interface FarkOzeti { fark: number; fazlaOdeme: number; iptalFark: number }
 
 /**
- * Eski bedelle ödeme sürecine girmiş (PAKETTE/ODEME_EMRINDE/ODENDI) taksitler için fark taksiti; fark negatifse kalıcı fazla ödeme
- * hatırlatması. PLANLANDI taksitlere dokunulmaz: `taksitPlaniniGuncelle` onları yeniden fiyatlar. Çağıran sözleşme satırını kilitlemiş olmalıdır.
+ * Tahakkuk etmiş taksitler için fark taksiti; fark negatifse kalıcı fazla ödeme hatırlatması. Tahakkuk etmiş: ödeme sürecine girmiş
+ * (PAKETTE/ODEME_EMRINDE/ODENDI) ya da vadesi geçmiş PLANLANDI taksit (`vadesiGecmisMi`; F1 ödeme kaydetmez, sistem dışında ödenmiş
+ * olabilir). Vadesi gelmemiş PLANLANDI taksitlere dokunulmaz: `taksitPlaniniGuncelle` onları yeniden fiyatlar. Çağıran sözleşme satırını
+ * kilitlemiş olmalıdır.
  *
  * FARK taksiti ana taksite ve onu doğuran kira dönemine bağlanır (`taksit_fark_baglantili`); artış hesabı yalnızca artıştan gelen
  * kira dönemi için doludur, tespit/anlaşma/düzeltmede boştur. Tespit dönem başından geriye işlediği için (TBK 344/3) bunlar da fark doğurur.
  *
- * Bir taksitin tahakkuk eden tutarı: ana tutar + ödeme sürecine girmiş önceki FARK'lar. Henüz PLANLANDI olan önceki FARK'lar tahakkuk
+ * Bir taksitin tahakkuk eden tutarı: ana tutar + tahakkuk etmiş önceki FARK'lar (aynı ölçüt). Vadesi gelmemiş PLANLANDI FARK'lar tahakkuk
  * etmemiştir: iptal edilir (korumalı yazma) ve eksik/fazla farkın tamamı tek yeni FARK ile (ya da fazla ödeme hatırlatmasıyla) karşılanır.
  */
 async function farklariIsle(tx: Tx, sozlesmeId: number, d: Tarih, kiraDonemiId: number, artisHesabiId: number | null, bugun: Tarih): Promise<FarkOzeti> {
   const ozet: FarkOzeti = { fark: 0, fazlaOdeme: 0, iptalFark: 0 }
+  const gun = dbTarih(bugun)
   const s = await tx.sozlesme.findUniqueOrThrow({
     where: { id: sozlesmeId },
     include: {
       kiraDonemleri: { orderBy: { baslangic: 'asc' } },
       taksitler: {
-        where: { tur: { in: ['NORMAL', 'KIST'] }, durum: { in: ['PAKETTE', 'ODEME_EMRINDE', 'ODENDI'] }, donemBitis: { gte: dbTarih(d) } },
+        where: {
+          tur: { in: ['NORMAL', 'KIST'] }, donemBitis: { gte: dbTarih(d) },
+          OR: [{ durum: { in: ['PAKETTE', 'ODEME_EMRINDE', 'ODENDI'] } }, { durum: 'PLANLANDI', vadeTarihi: { lt: gun } }],
+        },
         include: { farkTaksitleri: { where: { durum: { not: 'IPTAL' } } } },
         orderBy: { donemBaslangic: 'asc' },
       },
@@ -223,27 +229,24 @@ async function farklariIsle(tx: Tx, sozlesmeId: number, d: Tarih, kiraDonemiId: 
   })
   const kd = kiraDonemiGirdileri(s.kiraDonemleri)
   const vadeGun = await parametreTamsayi('FARK_VADE_GUN', bugun, tx)
+  const tahakkukEtmemis = (f: { durum: string; vadeTarihi: Date }) => f.durum === 'PLANLANDI' && !vadesiGecmisMi(f.vadeTarihi, bugun)
   for (const x of s.taksitler) {
     const donem = { baslangic: tarihDb(x.donemBaslangic), bitis: tarihDb(x.donemBitis) }
     const yeni = taksitTutari({ donem, periyotAy: s.odemePeriyoduAy as OdemePeriyodu, kiraAyiCapasi: tarihDb(s.baslangic), kiraDonemleri: kd, kist: s.kistYontemi })
     if (!yeni.ok) throw new IsKuraliHatasi(yeni.hata.kod, `${s.sozlesmeNo}: ${yeni.hata.mesaj}`)
-    for (const f of x.farkTaksitleri.filter((y) => y.durum === 'PLANLANDI')) {
+    for (const f of x.farkTaksitleri.filter(tahakkukEtmemis)) {
       const r = await tx.taksit.updateMany({ where: { id: f.id, durum: 'PLANLANDI' }, data: { durum: 'IPTAL', version: { increment: 1 } } })
       if (r.count === 0) throw new CakismaHatasi()
       ozet.iptalFark += 1
     }
-    const eski = x.farkTaksitleri.filter((y) => y.durum !== 'PLANLANDI').reduce((toplam, f) => toplam.plus(paraDb(f.tutar)), paraDb(x.tutar))
+    const eski = x.farkTaksitleri.filter((y) => !tahakkukEtmemis(y)).reduce((toplam, f) => toplam.plus(paraDb(f.tutar)), paraDb(x.tutar))
     const fark = yeni.deger.tutar.minus(eski)
     if (fark.isZero()) continue
     if (fark.isNegative()) {
-      const anahtar = `H5_FAZLA:taksit:${x.id}:${kiraDonemiId}`
-      const veri = {
-        kural: 'H5_FAZLA_ODEME', iliskiliTur: 'taksit', iliskiliId: String(x.id), sozlesmeId,
-        baslik: `Fazla ödeme — ${s.sozlesmeNo}`,
+      await fazlaOdemeHatirlat(tx, {
+        taksitId: x.id, ek: String(kiraDonemiId), sozlesmeId, baslik: `Fazla ödeme — ${s.sozlesmeNo}`,
         aciklama: `${formatTarih(donem.baslangic)} – ${formatTarih(donem.bitis)} taksitinde ${formatTL(fark.abs())} fazla ödendi; mahsup veya iade takibi gerekli.`,
-        hedefTarih: dbTarih(bugun), gorunurTarih: dbTarih(bugun), oncelik: 'KRITIK' as const, kararGerekli: true,
-      }
-      await tx.hatirlatma.upsert({ where: { anahtar }, create: { anahtar, ...veri }, update: veri })
+      }, bugun)
       ozet.fazlaOdeme += 1
       continue
     }
