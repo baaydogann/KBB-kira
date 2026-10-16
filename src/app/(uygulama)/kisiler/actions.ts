@@ -7,7 +7,10 @@ import { IsKuraliHatasi } from '@/server/hata'
 import { kisiAramaHedefi } from '@/server/kisi/arama'
 import { kisiSemasi, vergiStatusuSemasi } from '@/server/kisi/sema'
 import { ibanAktiflik, ibanEkle, kisiKaydet, kisiKimlikIleBul, statuTeyitEt } from '@/server/kisi/servis'
-import { basariDurumu, formKimligi, formMetni, formSurum, hataDurumu, type FormDurumu } from '@/app/_lib/form'
+import { borcSorguSemasi, hacizSemasi } from '@/server/kesinti/sema'
+import { borcSorguEkle, borcSorguSil, hacizEkle, hacizKapat } from '@/server/kesinti/servis'
+import { eylemSonrasiHatirlatmalariTazele } from '@/server/isler/hatirlatma-uret'
+import { basariDurumu, formKimligi, formMetni, formSecim, formSurum, hataDurumu, uyariIle, type FormDurumu } from '@/app/_lib/form'
 
 export async function kisiKaydetAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
   const k = await kullaniciGerekli()
@@ -76,4 +79,75 @@ export async function statuTeyitAction(_: FormDurumu, f: FormData): Promise<Form
   } catch (e) {
     return hataDurumu(e)
   }
+}
+
+function kisiKimligi(f: FormData): number {
+  const kisiId = formKimligi(f, 'kisiId')
+  if (kisiId === null) throw new IsKuraliHatasi('ID', 'Kişi kimliği geçersiz; sayfayı yenileyip tekrar deneyin.')
+  return kisiId
+}
+
+/** 22/A borç sorgusu: belge (borç yazısı) önceden yüklenip kimliği gizli alanla gelir. Hatırlatmalar (H3) hemen tazelenir. */
+export async function borcSorguEkleAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
+  const k = await kullaniciGerekli()
+  let kisiId: number
+  try {
+    kisiId = kisiKimligi(f)
+    const g = borcSorguSemasi.parse({
+      kisiId, sorguTarihi: formMetni(f, 'sorguTarihi'), borcVar: formSecim(f, 'borcVar'), borcTutari: formMetni(f, 'borcTutari') || null,
+      vergiDairesi: formMetni(f, 'vergiDairesi') || null, belgeNo: formMetni(f, 'belgeNo') || null, belgeId: formKimligi(f, 'belgeId'),
+    })
+    await borcSorguEkle(g, await islemBaglami(k))
+  } catch (e) {
+    return hataDurumu(e, f)
+  }
+  revalidatePath(`/kisiler/${kisiId}`)
+  return uyariIle(basariDurumu('Borç sorgusu kaydedildi.'), await eylemSonrasiHatirlatmalariTazele())
+}
+
+export async function borcSorguSilAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
+  const k = await kullaniciGerekli()
+  let kisiId: number
+  try {
+    kisiId = kisiKimligi(f)
+    const id = formKimligi(f, 'id')
+    if (id === null) throw new IsKuraliHatasi('ID', 'Sorgu kimliği geçersiz; sayfayı yenileyip tekrar deneyin.')
+    await borcSorguSil(id, await islemBaglami(k))
+  } catch (e) {
+    return hataDurumu(e)
+  }
+  revalidatePath(`/kisiler/${kisiId}`)
+  return uyariIle(basariDurumu('Borç sorgusu silindi.'), await eylemSonrasiHatirlatmalariTazele())
+}
+
+export async function hacizEkleAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
+  const k = await kullaniciGerekli()
+  let kisiId: number
+  try {
+    kisiId = kisiKimligi(f)
+    const g = hacizSemasi.parse({
+      kisiId, alacakli: formMetni(f, 'alacakli'), dosyaNo: formMetni(f, 'dosyaNo'), tebligTarihi: formMetni(f, 'tebligTarihi'), toplamTutar: formMetni(f, 'toplamTutar'),
+    })
+    await hacizEkle(g, await islemBaglami(k))
+  } catch (e) {
+    return hataDurumu(e, f)
+  }
+  revalidatePath(`/kisiler/${kisiId}`)
+  return basariDurumu('Haciz kaydedildi.')
+}
+
+export async function hacizKapatAction(_: FormDurumu, f: FormData): Promise<FormDurumu> {
+  const k = await kullaniciGerekli()
+  let kisiId: number
+  try {
+    kisiId = kisiKimligi(f)
+    const id = formKimligi(f, 'id')
+    const version = formSurum(f)
+    if (id === null || version === undefined) throw new IsKuraliHatasi('ID', 'Haciz kimliği geçersiz; sayfayı yenileyip tekrar deneyin.')
+    await hacizKapat(id, version, formMetni(f, 'neden'), await islemBaglami(k))
+  } catch (e) {
+    return hataDurumu(e, f)
+  }
+  revalidatePath(`/kisiler/${kisiId}`)
+  return basariDurumu('Haciz kapatıldı.')
 }
