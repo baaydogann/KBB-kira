@@ -1,3 +1,4 @@
+import ExcelJS from 'exceljs'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { ibanBicimle, vknGecerliMi } from '@/core/dogrulama'
 import { formatTL } from '@/core/para'
@@ -5,7 +6,8 @@ import { tarih as t } from '@/core/tarih'
 import { prisma } from '@/server/db'
 import { IsKuraliHatasi } from '@/server/hata'
 import { borcSorguEkle } from '@/server/kesinti/servis'
-import { paketBelgeleriPdf } from '@/server/paket/cikti'
+import { paketBankaDosyasi, paketBelgeleriPdf } from '@/server/paket/cikti'
+import { paketKesinlestir } from '@/server/paket/durum'
 import { paketCiktiVerisi } from '@/server/paket/cikti-verisi'
 import { paketHesapla } from '@/server/paket/hesapla'
 import { paketFaturasiKaydet } from '@/server/paket/servis'
@@ -149,5 +151,23 @@ describe('paket belgeleri', () => {
     expect(((await ekle('bozuk').catch((e: unknown) => e)) as IsKuraliHatasi).kod).toBe('DEGER')
     const tam = '{"gider":"630","vergi":"360","emanet22a":"333","emanetHaciz":"333","banka":"103","butceGider":"830","giderYansitma":"835","odenekliGider":"905","gonderilecekOdenek":"900"}'
     expect(await ekle(tam)).toBeGreaterThan(0)
+  })
+
+  it('banka dosyası: kesinleşmiş pakette tek satır, tutar 7773.2, IBAN metin; HESAPLANDI pakette IsKuraliHatasi; DISA_AKTAR BANKA_AKTARIMI', async () => {
+    const p = await hesaplanmis()
+    expect(((await paketBankaDosyasi(p, TEST_BAGLAMI).catch((e: unknown) => e)) as IsKuraliHatasi).kod).toBe('DURUM')
+    await paketKesinlestir(p, 1, TEST_BAGLAMI, BUGUN)
+    const { dosyaAdi, icerik } = await paketBankaDosyasi(p, TEST_BAGLAMI)
+    expect(dosyaAdi).toBe(`banka-aktarimi-${p}.xlsx`)
+    const wb = new ExcelJS.Workbook()
+    await wb.xlsx.load(icerik as unknown as ArrayBuffer)
+    const ws = wb.getWorksheet('Banka aktarımı')!
+    const iban = await prisma.iban.findUniqueOrThrow({ where: { id: h.ibanA } })
+    const kisi = await prisma.kisi.findUniqueOrThrow({ where: { id: h.kisiA } })
+    expect((ws.getRow(1).values as unknown[]).slice(1)).toEqual(['Sıra', 'Alıcı (ödeme kişisi)', 'IBAN', 'Tutar', 'Açıklama'])
+    expect(ws.rowCount).toBe(2)
+    expect((ws.getRow(2).values as unknown[]).slice(1)).toEqual([1, `${kisi.ad} ${kisi.soyad}`, iban.iban, 7773.2, `${kisi.tckn} – kira ödemesi – 02/2026 – ${(await paketCiktiVerisi(p)).kalemler[0]!.sozlesmeNo}`])
+    const d = await prisma.olayGunlugu.findFirstOrThrow({ where: { varlik: 'odeme_paketi', varlikId: String(p), eylem: 'DISA_AKTAR' } })
+    expect(d.sonra).toEqual({ belge: 'BANKA_AKTARIMI', kayitSayisi: 1 })
   })
 })
