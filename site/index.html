@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KBB Kira Takip</title>
+  <meta name="description" content="Konya Büyükşehir Belediyesinin kiracı olduğu taşınmazlar için kira sözleşmesi, artış, ödeme paketi, vergi kesintisi ve raporlama sistemi.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231d4ed8'/%3E%3Cpath d='M8 15l8-7 8 7v9H8z' fill='white'/%3E%3C/svg%3E">
+  <style>
+    :root {
+      --zemin: #f6f7f9; --kart: #ffffff; --metin: #111827; --soluk: #4b5563; --cizgi: #e5e7eb;
+      --marka: #1d4ed8; --marka-acik: #dbeafe; --vurgu: #047857;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --zemin: #0b1220; --kart: #111a2e; --metin: #e5e7eb; --soluk: #9ca3af; --cizgi: #1f2a44; --marka: #60a5fa; --marka-acik: #1e2b4a; --vurgu: #34d399; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--zemin); color: var(--metin); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    a { color: var(--marka); }
+    .kap { max-width: 1040px; margin: 0 auto; padding: 0 16px; }
+    header { border-bottom: 1px solid var(--cizgi); background: var(--kart); }
+    header .kap { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 14px; padding-bottom: 14px; }
+    .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; text-decoration: none; color: var(--metin); }
+    .logo span { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; background: var(--marka); color: #fff; font-size: 14px; }
+    nav a { margin-left: 18px; text-decoration: none; color: var(--soluk); font-size: 15px; }
+    nav a:hover { color: var(--marka); }
+    .kahraman { padding: 64px 0 40px; }
+    .kahraman h1 { font-size: clamp(30px, 5vw, 46px); line-height: 1.15; margin: 0 0 16px; letter-spacing: -0.02em; }
+    .kahraman p { font-size: 18px; color: var(--soluk); max-width: 720px; margin: 0 0 24px; }
+    .dugmeler { display: flex; flex-wrap: wrap; gap: 12px; }
+    .dugme { display: inline-block; padding: 10px 18px; border-radius: 8px; text-decoration: none; font-weight: 600; border: 1px solid var(--cizgi); color: var(--metin); background: var(--kart); }
+    .dugme.ana { background: var(--marka); border-color: var(--marka); color: #fff; }
+    section { padding: 36px 0; }
+    h2 { font-size: 26px; margin: 0 0 8px; letter-spacing: -0.01em; }
+    .alt { color: var(--soluk); margin: 0 0 24px; }
+    .izgara { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+    .kart { background: var(--kart); border: 1px solid var(--cizgi); border-radius: 12px; padding: 20px; }
+    .kart h3 { margin: 0 0 6px; font-size: 17px; }
+    .kart p { margin: 0; color: var(--soluk); font-size: 15px; }
+    .etiket { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--marka-acik); color: var(--marka); margin-bottom: 8px; }
+    ol.akis { counter-reset: adim; list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
+    ol.akis li { counter-increment: adim; background: var(--kart); border: 1px solid var(--cizgi); border-radius: 12px; padding: 14px 16px 14px 56px; position: relative; }
+    ol.akis li::before { content: counter(adim); position: absolute; left: 16px; top: 14px; width: 28px; height: 28px; border-radius: 50%; background: var(--marka); color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 14px; }
+    ol.akis strong { display: block; }
+    ol.akis span { color: var(--soluk); font-size: 15px; }
+    .formul { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; background: var(--kart); border: 1px solid var(--cizgi); border-radius: 8px; padding: 12px 14px; overflow-x: auto; font-size: 14px; }
+    ul.liste { margin: 0; padding-left: 20px; color: var(--soluk); }
+    ul.liste li { margin: 4px 0; }
+    .rakamlar { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+    .rakam { background: var(--kart); border: 1px solid var(--cizgi); border-radius: 12px; padding: 16px; }
+    .rakam b { display: block; font-size: 26px; color: var(--vurgu); }
+    .rakam span { color: var(--soluk); font-size: 14px; }
+    footer { border-top: 1px solid var(--cizgi); padding: 24px 0 40px; color: var(--soluk); font-size: 14px; }
+    @media (max-width: 640px) { nav { display: none; } .kahraman { padding-top: 40px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="kap">
+      <a class="logo" href="#"><span>KK</span>KBB Kira Takip</a>
+      <nav aria-label="Sayfa içi">
+        <a href="#ozellikler">Özellikler</a>
+        <a href="#akis">Ödeme akışı</a>
+        <a href="#teknik">Teknik yapı</a>
+        <a href="#kurulum">Kurulum</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div class="kap kahraman">
+      <span class="etiket">Belediye kira yönetimi</span>
+      <h1>Kira sözleşmesinden ödeme emrine, tek yerden.</h1>
+      <p>KBB Kira Takip, Konya Büyükşehir Belediyesinin kiracı olduğu taşınmazların sözleşmelerini, kira artışlarını, taksit planlarını, ödeme paketlerini, vergi kesintilerini ve denetim çıktılarını mevzuata uygun ve izlenebilir biçimde yönetir.</p>
+      <div class="dugmeler">
+        <a class="dugme ana" href="https://github.com/baaydogann/KBB-kira">Kaynak kodu</a>
+        <a class="dugme" href="https://github.com/baaydogann/KBB-kira/blob/main/docs/OPERASYON.md">Operasyon belgesi</a>
+      </div>
+    </div>
+
+    <section id="ozellikler">
+      <div class="kap">
+        <h2>Özellikler</h2>
+        <p class="alt">Her hesap, sonradan denetlenebilmesi için adım adım hesap iziyle saklanır.</p>
+        <div class="izgara">
+          <div class="kart"><span class="etiket">Sözleşme</span><h3>Sözleşme sihirbazı</h3><p>Taşınmaz, harcama birimi, malikler ve hisseleri, vekil ve IBAN, bedel, ödeme periyodu, artış kuralı; önizlemeyle taslak, aktifleştirme, fesih, yenileme ve belirsiz süreye çevirme.</p></div>
+          <div class="kart"><span class="etiket">Artış</span><h3>TÜFE ve sabit oranlı artış</h3><p>Onaylı endekslerle 12 aylık ortalama, TBK 344 tavanı, sabit ya da elle oran; onay sonrası vadesi geçmiş taksitler için FARK taksiti ya da fazla ödeme hatırlatması.</p></div>
+          <div class="kart"><span class="etiket">Plan</span><h3>Taksit planı</h3><p>Peşin/dönem sonu vadeler, kıst dönemler, tatile denk gelen vadeler; ödeme sürecindeki taksitler yeniden planlamada dondurulur.</p></div>
+          <div class="kart"><span class="etiket">Ödeme</span><h3>Ödeme paketi</h3><p>Birim ve vade aralığına göre taksit seçimi, malik bazında dağılım, ön kontrol, kilit altında kesinleştirme, ödeme emri, ödendi, iptal ve ödemeyi geri alma.</p></div>
+          <div class="kart"><span class="etiket">Kesinti</span><h3>Vergi ve kesintiler</h3><p>Gelir vergisi stopajı ve KDV, damga vergisi (istihkaktan ya da malik beyanı), icra haczi ve 6183 sayılı Kanun md. 22/A borç kesintisi; kalanlar paketler arasında iki kez kesilmez.</p></div>
+          <div class="kart"><span class="etiket">Çıktı</span><h3>Ödeme emri belgeleri</h3><p>Ödeme emri hazırlık föyü, ek belge kontrol listesi, harcama pusulası, muhasebe işlem fişi önerisi, kira artış tablosu ve banka aktarım Excel'i.</p></div>
+          <div class="kart"><span class="etiket">Rapor</span><h3>Vergi ve yönetim raporları</h3><p>Muhtasar, damga ve 22/A listeleri (Excel/CSV); ödenek ve taahhüt, gecikmiş ödemeler ve sözleşme durumu raporları.</p></div>
+          <div class="kart"><span class="etiket">Hatırlatma</span><h3>Pano ve takvim</h3><p>Vade, artış, bitiş ve fesih süresi, 22/A sorgusu, muhtasar beyanı ve damga makbuzu hatırlatmaları; kişisel veri içermeyen takvim (.ics) aboneliği.</p></div>
+          <div class="kart"><span class="etiket">Denetim</span><h3>Denetim dosyası</h3><p>Sözleşme bazında künye, malikler, kira dönemleri, artışlar ve endeks onayı, taksitler, dağılımlar, damga ve olay özetini tek PDF'te toplar.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="akis">
+      <div class="kap">
+        <h2>Aylık ödeme akışı</h2>
+        <p class="alt">Paket hesabı tahakkuk günü oranlarıyla yapılır; kesinleştirme aynı gün, kilit altında yeniden doğrulanır.</p>
+        <ol class="akis">
+          <li><strong>Paket oluştur</strong><span>Harcama birimi ve vade aralığı seçilir; uygun taksitler önerilir.</span></li>
+          <li><strong>Hesapla</strong><span>Malik bazında brüt, KDV, stopaj, damga, haciz, 22/A ve net tutarlar ile ön kontrol (IBAN, hisse, fatura, borç sorgusu).</span></li>
+          <li><strong>Kesinleştir</strong><span>Hesaptan sonra oran, malik, haciz ya da sorgu değiştiyse "yeniden hesaplayın" der; bayat tutar ödenmez.</span></li>
+          <li><strong>Belgeleri al</strong><span>Föy, ek listesi, pusulalar, fiş önerisi ve banka Excel'i indirilir.</span></li>
+          <li><strong>Ödeme emri ve ödendi</strong><span>Muhasebe ödeme emri no ve tarihi girilir; ödeme yapılınca taksitler ödendi olur.</span></li>
+          <li><strong>Beyan</strong><span>Ayın 20'sinde muhtasar ve damga listeleri hatırlatılır.</span></li>
+        </ol>
+        <p class="alt" style="margin-top:20px">Kesinti sırası:</p>
+        <div class="formul">net = brüt + KDV − stopaj − damga − haciz − 22/A  (net ≥ 0)</div>
+      </div>
+    </section>
+
+    <section id="teknik">
+      <div class="kap">
+        <h2>Teknik yapı</h2>
+        <p class="alt">Tek monolit; saf hesap çekirdeği, servis katmanı ve arayüz ayrı tutulur.</p>
+        <div class="izgara">
+          <div class="kart"><h3>Uygulama</h3><ul class="liste"><li>Next.js 15 (App Router, server actions)</li><li>TypeScript, Tailwind CSS</li><li>pdfmake ile PDF, exceljs ile Excel</li></ul></div>
+          <div class="kart"><h3>Veri</h3><ul class="liste"><li>PostgreSQL 17, Prisma</li><li>Kısıtlar ve tetikleyicilerle kesinleşmiş paket koruması</li><li>Kuruş hassasiyetinde ondalık para (decimal.js)</li></ul></div>
+          <div class="kart"><h3>Kalite</h3><ul class="liste"><li>Vitest birim ve entegrasyon testleri, fast-check özellik testleri</li><li>Stryker mutasyon testi (eşik %90)</li><li>Playwright uçtan uca testler</li></ul></div>
+          <div class="kart"><h3>Güvenlik ve KVKK</h3><ul class="liste"><li>TCKN, VKN ve IBAN adreslere, günlüklere, denetim satırlarına ve takvime yazılmaz</li><li>Listelerde IBAN maskeli; tam IBAN yalnızca çıktılarda</li><li>İndirmeler önbelleğe alınmaz, dışa aktarımlar denetime yazılır</li></ul></div>
+        </div>
+        <div class="rakamlar" style="margin-top:16px">
+          <div class="rakam"><b>475</b><span>birim testi</span></div>
+          <div class="rakam"><b>633</b><span>entegrasyon testi</span></div>
+          <div class="rakam"><b>%97</b><span>mutasyon skoru</span></div>
+          <div class="rakam"><b>2</b><span>uçtan uca senaryo</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="kurulum">
+      <div class="kap">
+        <h2>Kurulum</h2>
+        <p class="alt">Uygulama sunucu ve veritabanı gerektirir; bu sayfa yalnızca tanıtımdır. Kurum içi kurulum Docker Compose ile yapılır.</p>
+        <div class="formul">docker compose up -d</div>
+        <p class="alt" style="margin-top:12px">Migrasyonlar ve tohum verisi (mevzuat parametreleri, tatiller, endeksler) her güncellemede kendiliğinden uygulanır. Ayrıntılar, ters vekil, yedekleme ve aylık akış için <a href="https://github.com/baaydogann/KBB-kira/blob/main/docs/OPERASYON.md">operasyon belgesine</a> bakın.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="kap">KBB Kira Takip — Konya Büyükşehir Belediyesi kira yönetim sistemi. Bu sayfada gerçek kişi ya da sözleşme verisi yoktur.</div>
+  </footer>
+</body>
+</html>
