@@ -19,3 +19,8 @@ export async function denetimKaydi(
     },
   })
 }
+
+/** Kişisel veri içeren çıktının indirilmesi (spec §16): yalnızca belge türü ve kayıt sayısı yazılır; kimlik, IBAN ya da ad yazılmaz. */
+export async function disaAktarimKaydi(db: Tx, baglam: IslemBaglami, g: { varlik: string; varlikId: string | number; belge: string; kayitSayisi: number }): Promise<void> {
+  await denetimKaydi(db, baglam, { varlik: g.varlik, varlikId: g.varlikId, eylem: 'DISA_AKTAR', sonra: { belge: g.belge, kayitSayisi: g.kayitSayisi } })
+}

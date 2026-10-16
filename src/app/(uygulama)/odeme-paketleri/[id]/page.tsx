@@ -11,6 +11,7 @@ import { Rozet } from '@/components/ui/rozet'
 import { PAKET_DURUM_ETIKETI, PAKET_DURUM_TONU } from '../durum'
 import { EylemFormu } from '@/components/eylem-formu'
 import { paketHesaplaAction } from '../actions'
+import { CiktilarBolumu } from './bolumler/ciktilar'
 import { DagilimBolumu } from './bolumler/dagilim'
 import { DurumEylemleriBolumu } from './bolumler/durum-eylemleri'
 import { FaturalarBolumu } from './bolumler/faturalar'
@@ -45,6 +46,7 @@ export default async function PaketSayfasi({ params }: { params: Promise<{ id: s
           </div>
         ) : null}
         <DurumEylemleriBolumu p={p} bugun={bugun} />
+        <CiktilarBolumu p={p} />
         <OnKontrolBolumu p={p} />
         <TaksitlerBolumu p={p} oneriler={oneriler} duzenlenebilir={duzenlenebilir} />
         <FaturalarBolumu p={p} duzenlenebilir={duzenlenebilir} />
