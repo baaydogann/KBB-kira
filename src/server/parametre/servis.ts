@@ -1,3 +1,4 @@
+import type { FisHesaplari } from '@/core/paket/muhasebe'
 import { z } from 'zod'
 import { vknGecerliMi } from '@/core/dogrulama'
 import { VARSAYILAN_STATU_KURALLARI, type StatuKurali } from '@/core/hesap/vergi'
@@ -95,6 +96,17 @@ export async function statuKurallari(tarih: Tarih, db: Tx = prisma): Promise<Rec
   return sonuc
 }
 
+const hesapKodu = z.string().regex(/^\d{3}(\.\d{1,3})*$/)
+const fisHesaplariSemasi = z.object({
+  gider: hesapKodu, vergi: hesapKodu, emanet22a: hesapKodu, emanetHaciz: hesapKodu, banka: hesapKodu,
+  butceGider: hesapKodu, giderYansitma: hesapKodu, odenekliGider: hesapKodu, gonderilecekOdenek: hesapKodu,
+}).strict()
+
+/** Muhasebe işlem fişi önerisinin hesap kodları (MUHASEBE_FIS_HESAPLARI). */
+export async function fisHesaplari(tarih: Tarih, db: Tx = prisma): Promise<FisHesaplari> {
+  return fisHesaplariSemasi.parse(JSON.parse(await parametreGetir('MUHASEBE_FIS_HESAPLARI', tarih, db)))
+}
+
 export async function vergiOranlari(statu: VergiStatusu, tarih: Tarih, db: Tx = prisma): Promise<{ stopaj: Para; kdv: Para; kural: StatuKurali }> {
   const kural = (await statuKurallari(tarih, db))[statu]
   const stopaj = kural.stopaj === null ? SIFIR : await parametreOran(kural.stopaj, tarih, db)
@@ -147,6 +159,18 @@ function degerDogrula(anahtar: string, deger: string, sonKayit: { deger: string 
     }
     if (!statuSemasi.safeParse(ayristirilan).success) {
       throw new IsKuraliHatasi('DEGER', 'Statü kuralı şemaya uymuyor: stopaj, kdvli, teyitGerekli ve muhsgkKodu alanları geçerli olmalıdır.', 'deger')
+    }
+    return
+  }
+  if (anahtar === 'MUHASEBE_FIS_HESAPLARI') {
+    let ayristirilan: unknown
+    try {
+      ayristirilan = JSON.parse(deger)
+    } catch {
+      throw new IsKuraliHatasi('DEGER', 'Fiş hesapları geçerli bir JSON olmalıdır.', 'deger')
+    }
+    if (!fisHesaplariSemasi.safeParse(ayristirilan).success) {
+      throw new IsKuraliHatasi('DEGER', 'Fiş hesapları şemaya uymuyor: gider, vergi, emanet22a, emanetHaciz, banka, butceGider, giderYansitma, odenekliGider ve gonderilecekOdenek hesap kodu olmalıdır.', 'deger')
     }
     return
   }

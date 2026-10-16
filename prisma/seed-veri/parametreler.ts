@@ -59,6 +59,12 @@ export const PARAMETRELER: ParametreTohumu[] = [
   { anahtar: 'HATIRLATMA_MEVZUAT_ONCE_GUN', deger: '30', yururlukBaslangic: H },
   { anahtar: 'IDARE_ADI', deger: 'Konya Büyükşehir Belediyesi', yururlukBaslangic: H, aciklama: 'Ödeme emri hazırlık föyü başlığı' },
   { anahtar: 'IDARE_VKN', deger: 'GIRILMEDI', yururlukBaslangic: H, aciklama: 'Kurumun vergi kimlik numarası; kurulumda girilir (föy başlığı)' },
+  {
+    anahtar: 'MUHASEBE_FIS_HESAPLARI',
+    deger: '{"gider":"630","vergi":"360","emanet22a":"333","emanetHaciz":"333","banka":"103","butceGider":"830","giderYansitma":"835","odenekliGider":"905","gonderilecekOdenek":"900"}',
+    yururlukBaslangic: H, mevzuatDayanagi: 'MİBMY + 31.03.2026 değişikliği; 333 ve 135 kullanımı müşavir teyidi bekler (spec §21-8, §21-9)',
+    aciklama: 'Muhasebe işlem fişi önerisinin hesap kodları',
+  },
   { anahtar: 'EKONOMIK_KOD_HIZMET_BINASI', deger: '03.5.5.05', yururlukBaslangic: '2021-01-01', mevzuatDayanagi: 'Analitik Bütçe Sınıflandırma Rehberi' },
   { anahtar: 'EKONOMIK_KOD_LOJMAN', deger: '03.5.5.06', yururlukBaslangic: '2021-01-01' },
   { anahtar: 'EKONOMIK_KOD_ARSA', deger: '03.5.5.07', yururlukBaslangic: '2021-01-01' },

@@ -1,14 +1,15 @@
-import type { PaketDurumu } from '@/generated/prisma'
-import type { DagilimGoruntusu } from '@/core/hesap/goruntu'
+import type { PaketDurumu, Prisma } from '@/generated/prisma'
+import type { DagilimGoruntusu, HesapSatiri } from '@/core/hesap/goruntu'
+import { fisOnerisi } from '@/core/paket/muhasebe'
 import { ekBelgeler, type EkBelge } from '@/core/paket/ek-belge'
 import { SIFIR, formatOran, type Para } from '@/core/para'
-import { enBuyukTarih, enKucukTarih, formatTarih, parcala, type Tarih } from '@/core/tarih'
+import { ayAdi, enBuyukTarih, enKucukTarih, formatTarih, parcala, type Tarih } from '@/core/tarih'
 import { prisma } from '../db'
 import { dbTarih, paraDb, paraYaz, tarihDb, tarihDbOpt } from '../donustur'
 import { BulunamadiHatasi, IsKuraliHatasi } from '../hata'
 import { KESINLESMIS_PAKET_DURUMLARI } from '../kesinti/servis'
 import { kisiGorunenAd } from '../kisi/servis'
-import { parametreGetir } from '../parametre/servis'
+import { fisHesaplari, parametreGetir } from '../parametre/servis'
 import type { PaketOnKontrolKaydi } from './hesapla'
 
 export interface AliciCiktisi {
@@ -39,6 +40,13 @@ export interface PaketCiktiVerisi {
   kesintiler: KesintiCiktisi[]
   toplam: { gider: string; kesinti: string; net: string }
   ekBelgeler: EkBelge[]
+  fis: { satirlar: { kayit: number; hesap: string; aciklama: string; borc: string; alacak: string }[]; notlar: string[] }
+  artislar: ArtisCiktisi[]
+}
+
+export interface ArtisCiktisi {
+  sozlesmeNo: string; donemBaslangic: Tarih; referans: string; eskiBedel: string; tavan: string | null; sozlesmeOrani: string | null
+  uygulananOran: string; yeniBedel: string; onaylayan: string | null; onayZamani: string | null; satirlar: HesapSatiri[]
 }
 
 const CIKTI_DURUMLARI: readonly PaketDurumu[] = ['HESAPLANDI', 'KESINLESTI', 'ODEME_EMRINDE', 'ODENDI']
@@ -168,6 +176,8 @@ export async function paketCiktiVerisi(paketId: number): Promise<PaketCiktiVeris
   // İlk ödeme: sözleşmenin taksiti bu paketten önce kesinleşmiş başka bir pakette yok ve paketsiz ödenmiş (sistem dışı/göç) taksiti yok.
   const sozlesmeler = [...new Map(p.dagilimlar.map((d) => [d.taksit.sozlesmeId, d.taksit.sozlesme])).values()]
   const sozlesmeBelgeleri = []
+  const artisIdleri = new Set<number>()
+  const ilkOdemeler: { sozlesmeNo: string; taahhut: Para | null }[] = []
   for (const s of sozlesmeler) {
     const oncekiPaket = await prisma.paketTaksit.count({
       where: {
@@ -179,19 +189,52 @@ export async function paketCiktiVerisi(paketId: number): Promise<PaketCiktiVeris
     const kendi = p.taksitler.filter((x) => x.taksit.sozlesmeId === s.id)
     const bas = kendi.map((x) => tarihDb(x.taksit.donemBaslangic)).reduce(enKucukTarih)
     const bit = kendi.map((x) => tarihDb(x.taksit.donemBitis)).reduce(enBuyukTarih)
-    const artisVar = kendi.some((x) => x.taksit.artisHesabiId !== null) || (await prisma.artisHesabi.count({
-      where: { sozlesmeId: s.id, durum: 'ONAYLANDI', donemBaslangic: { gte: dbTarih(bas), lte: dbTarih(bit) } },
-    })) > 0
+    // Artış tablosu: paketteki taksit dönemleri aralığında başlayan onaylı artışlar ve paketteki FARK taksitlerinin artışları.
+    const ilgili = [
+      ...kendi.flatMap((x) => (x.taksit.artisHesabiId === null ? [] : [x.taksit.artisHesabiId])),
+      ...(await prisma.artisHesabi.findMany({
+        where: { sozlesmeId: s.id, durum: 'ONAYLANDI', donemBaslangic: { gte: dbTarih(bas), lte: dbTarih(bit) } }, select: { id: true },
+      })).map((a) => a.id),
+    ]
+    for (const id of ilgili) artisIdleri.add(id)
+    const ilkOdeme = oncekiPaket === 0 && paketsizOdenen === 0
+    if (ilkOdeme) {
+      const ilk = await prisma.damgaKaydi.findFirst({ where: { sozlesmeId: s.id, olay: 'ILK', iptal: false }, select: { matrah: true } })
+      ilkOdemeler.push({ sozlesmeNo: s.sozlesmeNo, taahhut: ilk ? paraDb(ilk.matrah) : null })
+    }
     sozlesmeBelgeleri.push({
-      sozlesmeNo: s.sozlesmeNo, ilkOdeme: oncekiPaket === 0 && paketsizOdenen === 0, onayBelgesiNo: s.onayBelgesiNo,
-      onayBelgesiTarihi: tarihDbOpt(s.onayBelgesiTarihi), piyasaArastirmaTarihi: tarihDbOpt(s.piyasaArastirmaTarihi), imzaTarihi: tarihDbOpt(s.imzaTarihi), artisVar,
+      artisVar: ilgili.length > 0,
+      sozlesmeNo: s.sozlesmeNo, ilkOdeme, onayBelgesiNo: s.onayBelgesiNo,
+      onayBelgesiTarihi: tarihDbOpt(s.onayBelgesiTarihi), piyasaArastirmaTarihi: tarihDbOpt(s.piyasaArastirmaTarihi), imzaTarihi: tarihDbOpt(s.imzaTarihi),
     })
   }
   const sorguIdleri = kayit.alicilar22a.filter((a) => a.sorguGerekli && a.borcSorguId !== null).map((a) => Number(a.borcSorguId))
   const sorgular = await prisma.borcSorgu.findMany({ where: { id: { in: sorguIdleri } }, orderBy: { id: 'asc' } })
   const hacizler = [...new Map(kesintiSatirlari.filter((x) => x.k.haciz !== null).map((x) => [x.k.haciz!.id, x.k.haciz!])).values()]
 
+  const tertipler = [...grupla(kalemler, (k) => k.tertip).values()].map((g) => ({ ekonomikKod: g[0]!.ekonomikKod, tertip: g[0]!.tertip, gider: topla(g.map((k) => paraDb(k.gider))) }))
+  const tur = (f: (s: (typeof satirlar)[number]) => Para) => topla(satirlar.map(f))
+  const fis = fisOnerisi({
+    tertipler, stopaj: tur((s) => s.stopaj), damga: tur((s) => s.damga), haciz: tur((s) => s.haciz), kesinti22a: tur((s) => s.kesinti22a), net,
+    ilkOdemeler, hesaplar: await fisHesaplari(hesapTarihi),
+  })
+  const artisKayitlari = await prisma.artisHesabi.findMany({ where: { id: { in: [...artisIdleri] } }, include: { sozlesme: { select: { sozlesmeNo: true } } }, orderBy: [{ sozlesmeId: 'asc' }, { donemBaslangic: 'asc' }] })
+  const onaylayanlar = new Map((await prisma.kullanici.findMany({
+    where: { id: { in: artisKayitlari.flatMap((a) => (a.onaylayanId === null ? [] : [a.onaylayanId])) } }, select: { id: true, adSoyad: true },
+  })).map((k) => [k.id, k.adSoyad]))
+  const oranMetni = (x: Prisma.Decimal | null) => (x === null ? null : formatOran(paraDb(x)))
+  const artislar: ArtisCiktisi[] = artisKayitlari.map((a) => ({
+    sozlesmeNo: a.sozlesme.sozlesmeNo, donemBaslangic: tarihDb(a.donemBaslangic), referans: ayAdi({ yil: a.referansYil, ay: a.referansAy }),
+    eskiBedel: paraYaz(paraDb(a.eskiBedel)), tavan: oranMetni(a.tavan), sozlesmeOrani: oranMetni(a.sozlesmeOrani),
+    uygulananOran: oranMetni(a.uygulananOran) ?? '—', yeniBedel: a.yeniBedel === null ? '—' : paraYaz(paraDb(a.yeniBedel)),
+    onaylayan: a.onaylayanId === null ? null : (onaylayanlar.get(a.onaylayanId) ?? null),
+    onayZamani: a.onayZamani === null ? null : a.onayZamani.toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' }),
+    satirlar: ((a.gerekce ?? {}) as { satirlar?: HesapSatiri[] }).satirlar ?? [],
+  }))
+
   return {
+    fis: { satirlar: fis.satirlar.map((x) => ({ ...x, borc: paraYaz(x.borc), alacak: paraYaz(x.alacak) })), notlar: fis.notlar },
+    artislar,
     paket: {
       id: p.id, ad: p.ad, durum: p.durum, hesapTarihi, odemeEmriNo: p.muhasebeOdemeEmriNo, odemeEmriTarihi: tarihDbOpt(p.muhasebeOdemeEmriTarihi),
       odemeTarihi: tarihDbOpt(p.odemeTarihi),
