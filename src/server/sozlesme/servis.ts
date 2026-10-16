@@ -244,6 +244,10 @@ async function oncekiSozlesmeyiKapat(tx: Tx, oncekiId: number, yeni: { baslangic
 
 export async function sozlesmeAktiflestir(id: number, version: number, baglam: IslemBaglami, bugun: Tarih = bugunIstanbul()): Promise<void> {
   await prisma.$transaction(async (tx) => {
+    // Sözleşme satır kilidi işlemin İLK ifadesidir (yaşam döngüsü ve artış işlemleriyle aynı kural): kira dönemi eklemeden (FOR KEY SHARE)
+    // ve durum güncellemesinden önce alınmazsa plan güncellemesindeki FOR UPDATE yükseltmesi eşzamanlı bir işlemle karşılıklı bekler (40P01).
+    // Yenilemede sıra yeni → eski: önce bu (yeni) sözleşme, sonra `oncekiSozlesmeyiKapat` içinde eskisi kilitlenir.
+    await tx.$queryRaw`SELECT id FROM sozlesme WHERE id = ${id} FOR UPDATE`
     const s = await tx.sozlesme.findUnique({ where: { id }, include: { malikler: { include: { kisi: true, iban: true } } } })
     if (!s) throw new BulunamadiHatasi('Sözleşme bulunamadı.')
     if (s.durum !== 'TASLAK') throw new IsKuraliHatasi('DURUM', 'Yalnızca taslak sözleşmeler aktifleştirilebilir.')

@@ -345,6 +345,32 @@ describe('eşzamanlılık ve bayat satır koruması (taksit planı)', () => {
     expect(new Set(taksitler.map((x) => x.donemBaslangic.toISOString())).size).toBe(25)
   })
 
+  it('aktifleştirme sözleşme satır kilidini ilk ifadede alır: alt satır ekleyip tam kilide yükselten eşzamanlı işlemle kilitlenmez', async () => {
+    const id = await sozlesmeTaslakKaydet(girdi(h), TEST_BAGLAMI)
+    let tutuyor!: () => void
+    const tutuyorSoz = new Promise<void>((coz) => { tutuyor = coz })
+    let birak!: () => void
+    const birakSoz = new Promise<void>((coz) => { birak = coz })
+    const GERI_AL = new Error('geri al')
+    // Başka bir işlem sözleşmeye bağlı alt satır ekler (sözleşmede FOR KEY SHARE), sonra tam kilide (FOR UPDATE) yükselir ve geri alınır.
+    const baska = prisma.$transaction(async (tx) => {
+      await tx.sozlesmeMalik.create({ data: { sozlesmeId: id, kisiId: h.kisiB, pay: 1, payda: 2, ibanId: h.ibanB, gecerlilikBaslangic: new Date('2026-01-01') } })
+      tutuyor()
+      await birakSoz
+      await tx.$queryRaw`SELECT id FROM sozlesme WHERE id = ${id} FOR UPDATE`
+      throw GERI_AL
+    }).then(() => null, (e: unknown) => e)
+    await tutuyorSoz
+    // Kilidi ilk ifadede almayan aktifleştirme durumu güncelleyip (FOR NO KEY UPDATE) planda FOR UPDATE'e yükselirken diğer işlemle
+    // karşılıklı bekler (40P01). Doğru sıra: ilk ifade bekler, hiçbir şey tutmaz; diğer işlem bitince aktifleştirme sürer.
+    const aktif = sozlesmeAktiflestir(id, 0, TEST_BAGLAMI, BUGUN).then(() => null, (e: unknown) => e)
+    await kilitBekleyeniBekle()
+    birak()
+    expect(await baska).toBe(GERI_AL)
+    expect(await aktif).toBeNull()
+    expect((await prisma.sozlesme.findUniqueOrThrow({ where: { id } })).durum).toBe('AKTIF')
+  })
+
   it('önceki sözleşme okunduktan sonra başkası değiştirirse yenileme aktifleşmesi CakismaHatasi ile geri alınır', async () => {
     const eskiId = await aktifSozlesme()
     const yeniId = await sozlesmeTaslakKaydet(girdi(h, { baslangic: '2026-07-01', bitis: '2027-06-30', ilkKiraBaslangici: '2026-01-01' }), TEST_BAGLAMI)
